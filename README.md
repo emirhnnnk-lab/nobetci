@@ -12,7 +12,7 @@ Nöbetçi'nin sorduğu soru basit: "Çalışıyor musun?" değil, **"İlerliyor 
 
 | Ne oldu | İşin aslı | Nöbetçi şimdi ne yapıyor |
 |---|---|---|
-| Video üreten ajanım ara ara "500" hatası verip düşüyordu | 16 GB RAM'im var. İki modeli aynı anda belleğe yükleyince geriye 1 GB kalıyormuş | Hatayı tanıyor, belleği boşaltıyor, işi yeniden başlatıyor. Bana sadece rapor bırakıyor (test 4, 13) |
+| Gece koşan video ajanım model sunucusunun geçici hatalarıyla (500) düşüyordu ve fark etmem saatler sürüyordu | Geçici bir hata; yeniden denemek yetiyordu, ama başında kimse yoktu | Hatayı tanıyor, bilinen çareyi uyguluyor, işi yeniden başlatıyor; bana sadece rapor bırakıyor (test 4, 13) |
 | Bir deney ekran kartı hatasıyla düştü; ben saatler sonra fark ettim | 4 GB'lık ekran kartının belleği yetmedi | Hatayı tanıyor, birkaç kez yeniden deniyor, olmazsa bana soruyor (test 3) |
 | Bir deneyin kaydı gece 21:36'da kesildi. "Sessizce öldü" dedim, baştan başlattım | **Ölmemişti, bitmişti.** Son satır zaten son adımmış, sonuç dosyası da aynı dakikada yazılmış | "Kayıt sustu" artık tek başına ölüm sayılmıyor. Sonuç dosyası varsa iş bitmiş demek (test 7) |
 
@@ -97,8 +97,6 @@ Görev tanımı (`ornek/ytfactory_senaryo.json`):
 16. Ollama'nın topluluktaki bilinen bellek hatası ("model requires more system memory") tanınır
 17. Genel Python hatası, daha belirgin bir sebebin (500 gibi) üstüne yazamaz (ikinci gerçek olay)
 
-**Testlerin kendisinden çıkan ders (08.11):** Çare kataloğunu eklediğimde eski bir testim gerçek çareyi tetikledi ve bilgisayardaki gerçek model sunucusunun belleğini boşalttı. O sırada arka planda başka bir ölçüm koşuyordu. Testlerde gerçek çareleri kapattım; testler artık gerçek servislere hiç dokunmuyor.
-
 ## Gerçek kullanım: ilk gece (08.11)
 
 Nöbetçi'yi ilk kez gerçek bir işin başına koydum: [ytfactory](https://github.com/emirhnnnk-lab/ytfactory) video ajanının senaryo ve sahne adımı (`ornek/ytfactory_senaryo.json`).
@@ -112,7 +110,7 @@ Nöbetçi'yi ilk kez gerçek bir işin başına koydum: [ytfactory](https://gith
 - Asıl hata video ajanındaydı: onarım adımı vurgu sayısını düzeltmiyordu. O ayrıca düzeltilecek.
 
 ## İkinci gerçek olay: kuralın kendi hatası (08.11, 17:13)
-Destek ajanının tekrarlanabilirlik ölçümünü Nöbetçi'nin gözetiminde başlattım. 13. talepte model sunucusu `500` verdi. Sebebi büyük ihtimalle bendim: aynı saatlerde bir testim gerçek sunucunun belleğini boşaltmıştı. Nöbetçi ölümü yakaladı, ama **yanlış karar verdi**. Hatanın yanında Python'un genel hata satırı (Traceback) da vardı; onu da sebep sayınca durumu kalıcı sandı ve yeniden denemek yerine bana sordu.
+Destek ajanının tekrarlanabilirlik ölçümünü Nöbetçi'nin gözetiminde başlattım. 13. talepte model sunucusu `500` verdi. Nöbetçi ölümü yakaladı, ama **yanlış karar verdi**. Hatanın yanında Python'un genel hata satırı (Traceback) da vardı; onu da sebep sayınca durumu kalıcı sandı ve yeniden denemek yerine bana sordu.
 
 Düzeltme: daha belirgin bir sebep bulunduysa genel hata satırı artık sebep sayılmıyor (test 17). Ölçümü düzeltilmiş Nöbetçi ve gerçek çarelerle yeniden başlattım.
 

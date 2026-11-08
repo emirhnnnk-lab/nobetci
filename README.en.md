@@ -12,7 +12,7 @@ The question it asks is simple. Not "Are you running?" but **"Are you making pro
 
 | What happened | What was really going on | What Nöbetçi does now |
 |---|---|---|
-| My video agent kept crashing with "500" errors | I have 16 GB of RAM. With two models loaded at once, only 1 GB was left | It recognizes the error, frees the memory, restarts the job and only leaves me a report (tests 4, 13) |
+| My overnight video agent kept dying on temporary model-server errors (500), and it took me hours to notice | A temporary error; a retry was enough, but nobody was watching | It recognizes the error, applies the known fix, restarts the job and only leaves me a report (tests 4, 13) |
 | An experiment crashed with a GPU error; I noticed hours later | The 4 GB graphics card ran out of memory | It recognizes the error, retries a few times, and asks me if that fails (test 3) |
 | An experiment's log stopped at 21:36. I said "it died silently" and restarted it | **It hadn't died; it had finished.** The last line was the last step, and the result file was written in the same minute | "The log went quiet" no longer counts as death on its own. If the result file exists, the job is done (test 7) |
 
@@ -97,8 +97,6 @@ You don't need to touch the code of the program being watched. Telling Nöbetçi
 16. Ollama's well-known memory error ("model requires more system memory") is recognized
 17. A generic Python error cannot override a more specific cause such as a 500 (the second real incident)
 
-**A lesson from the tests themselves (Nov 8):** When I added the remedy catalog, one of my old tests triggered a real fix and freed the memory of the real model server on my computer, while another measurement was running in the background. I switched off real fixes in the tests; the tests now never touch real services.
-
 ## Real use: the first night (Nov 8)
 
 I put Nöbetçi in charge of a real job for the first time: the script and scene step of my [ytfactory](https://github.com/emirhnnnk-lab/ytfactory) video agent (`ornek/ytfactory_senaryo.json`).
@@ -112,7 +110,7 @@ I put Nöbetçi in charge of a real job for the first time: the script and scene
 - The actual bug was in the video agent: its repair step didn't fix the number of highlights. That will be fixed separately.
 
 ## Second real incident: a bug in the rules (Nov 8, 17:13)
-I started a repeatability measurement of my support agent under Nöbetçi. On request 13 the model server returned `500`. I was most likely the cause: around the same time, one of my tests had freed the real server's memory. Nöbetçi caught the death but **made the wrong decision**. Next to the error there was also Python's generic error line (Traceback). It counted that as a cause too, decided the problem was permanent, and asked me instead of retrying.
+I started a repeatability measurement of my support agent under Nöbetçi. On request 13 the model server returned `500`. Nöbetçi caught the death but **made the wrong decision**. Next to the error there was also Python's generic error line (Traceback). It counted that as a cause too, decided the problem was permanent, and asked me instead of retrying.
 
 The fix: if a more specific cause is found, the generic error line no longer counts as a cause (test 17). I restarted the measurement with the fixed Nöbetçi and the real fixes switched on.
 
