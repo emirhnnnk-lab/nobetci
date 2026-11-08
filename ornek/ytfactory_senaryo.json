@@ -1,0 +1,18 @@
+{
+  "defter": "ornek/durum",
+  "aralik_sn": 10,
+  "llm": "qwen2.5:7b",
+  "gorevler": [
+    {
+      "ad": "ytfactory-senaryo",
+      "komut": ["python", "src/ajan.py", "--slug", "930-nobetci-demo", "--kaynak", "videos/911-phone-driving/kaynak.txt",
+                "--atif", "Strayer DL et al. (2003), J Exp Psychol Appl. PMID 12710835", "--sadece", "senaryo"],
+      "cwd": "C:/Users/emirh/OneDrive/Desktop/ytfactory",
+      "log": "ornek/loglar/ytfactory-senaryo.log",
+      "cikti": "C:/Users/emirh/OneDrive/Desktop/ytfactory/videos/930-nobetci-demo/scenes.spec.json",
+      "sessizlik_sn": 900,
+      "geri_alinabilir": true,
+      "yeniden_hak": 2
+    }
+  ]
+}
