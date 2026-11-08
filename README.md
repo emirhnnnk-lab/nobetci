@@ -1,46 +1,46 @@
-# Nöbetçi — sessiz ölümü yakalayan izleme ajanı
+# Nöbetçi: sessizce ölen işleri yakalayan bekçi
 
 > **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. 16 failure-scenario tests; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents.
 
-Uzun süren işler (model eğitimi, deney koşuları, video render'ı, gece çalışan ajanlar) çoğu zaman **gürültüsüz** ölür. Hata mesajı ekrana düşer ama kimse okumaz. Süreç ayakta görünür ama hiçbir şey yapmıyordur. Ya da "başarıyla" çıkar ama beklenen dosyayı yazmamıştır.
+Akşam uzun bir deney başlatıyorum, sabah kalkıp bakıyorum: ya bitmiş, ya da gece yarısı bir yerde ölmüş ve kimse bana haber vermemiş. Ekrana bir hata düşmüş ama okuyan olmamış. Ya da program "bitti" deyip kapanmış ama yazması gereken dosya ortada yok.
 
-Nöbetçi bu yüzden "süreç yaşıyor mu?" diye sormaz, **"iş ilerliyor mu, sonuç ortada mı?"** diye sorar.
+Buna **sessiz ölüm** diyorum. Benim başıma birkaç kez geldi. Bir noktadan sonra "bunu ben kontrol etmeyeyim, bir bekçi etsin" dedim ve Nöbetçi'yi yazdım.
 
-## Neden yazdım
+Nöbetçi'nin sorduğu soru basit: "Çalışıyor musun?" değil, **"İlerliyor musun, sonuç ortada mı?"** Bu ikisi aynı şey değil. Bir program açık durup hiçbir şey yapmıyor olabilir.
 
-Kendi deneylerimde arka arkaya bunlar oldu:
+## Neden yazdım: başıma gelen üç olay
 
-| Ne oldu | Gerçek sebep | Nöbetçideki karşılığı |
+| Ne oldu | İşin aslı | Nöbetçi şimdi ne yapıyor |
 |---|---|---|
-| Ollama tabanlı video ajanı ara ara `HTTP 500` ile düştü | 16 GB RAM'de 7B + 14B model birlikte yüklüydü; boş RAM ~1 GB | Geçici sebep → otomatik yeniden deneme (test 4) |
-| Yorumlanabilirlik deneyi CUDA hatasıyla düştü, ben saatler sonra fark ettim | 4 GB GPU'da bellek baskısı | GPU belleği imzası, hak sınırlı yeniden başlatma (test 3) |
-| Bir koşunun log'u 21:36'da kesildi, "sessizce öldü" sandım ve yeniden başlattım | **Ölmemişti — bitmişti.** Son log satırı zaten son adımdı; sonuç dosyası aynı dakikada yazılmıştı | "Log sustu" tek başına ölüm sayılmaz; çıktı dosyası varsa iş **bitti** (test 7) |
+| Video üreten ajanım ara ara "500" hatası verip düşüyordu | 16 GB RAM'im var. İki modeli aynı anda belleğe yükleyince geriye 1 GB kalıyormuş | Hatayı tanıyor, belleği boşaltıyor, işi yeniden başlatıyor. Bana sadece rapor bırakıyor (test 4, 13) |
+| Bir deney ekran kartı hatasıyla düştü; ben saatler sonra fark ettim | 4 GB'lık ekran kartının belleği yetmedi | Hatayı tanıyor, birkaç kez yeniden deniyor, olmazsa bana soruyor (test 3) |
+| Bir deneyin kaydı gece 21:36'da kesildi. "Sessizce öldü" dedim, baştan başlattım | **Ölmemişti, bitmişti.** Son satır zaten son adımmış, sonuç dosyası da aynı dakikada yazılmış | "Kayıt sustu" artık tek başına ölüm sayılmıyor. Sonuç dosyası varsa iş bitmiş demek (test 7) |
 
-Üçüncüsü en öğretici olanı: yanlış alarm da gerçek bir arızadır, insanın vaktini yer. Bu yüzden Nöbetçi'nin "bitti" tanımı log'a değil **sonuç dosyasına** bakar.
+Açıkçası en çok üçüncüsünden öğrendim. Yanlış alarm da arızadır, insanın vaktini yer. O yüzden Nöbetçi bir işin bitip bitmediğine kayda değil, **sonuç dosyasına** bakarak karar veriyor.
 
-## Nasıl çalışır
+## Nasıl çalışıyor
 
-Üç rol var, birbirleriyle konuşmazlar; her şey dosyaya yazılır (`olaylar.jsonl`, `INSANA_SOR.md`, `nabiz`):
+İçeride üç görevli var. Birbirleriyle sohbet etmiyorlar; her biri işini bir dosyaya yazıyor, sıradaki oradan devralıyor. Bir fabrika bandı gibi:
 
 ```
- gözcü ──► durum ──► teşhis ──► şef ──► yeniden başlat  (geri alınabilir + geçici sebep + hak var)
-   │                    │          └──► INSANA_SOR.md   (diğer her şey)
-   │                    └─ her iddia log'dan birebir bir satırla kanıtlanır
-   └─ log/çıktı dosyasının değişim zamanı + çıkış kodu + beklenen çıktı
+ gözcü ──► durum ──► teşhis ──► şef ──► yeniden başlat  (geri alınabilir iş + geçici sebep + hakkı var)
+   │                    │          └──► bana sor          (geri kalan her şey)
+   │                    └─ söylediği her şeyi kayıttan bir satırla kanıtlar
+   └─ kayıt ve sonuç dosyası en son ne zaman değişti, program nasıl kapandı
 ```
 
-- **Gözcü** beş durumdan birini verir:
-  - `CALISIYOR`
-  - `BITTI`: çıkış 0 ve beklenen çıktı dosyası var.
-  - `YESIL_AMA_OLU`: çıkış 0 ama çıktı yok.
-  - `OLDU`: sıfırdan farklı çıkış kodu.
-  - `ASKIDA`: süreç ayakta ama N saniyedir ne log ne çıktı değişti.
-- **Teşhis** önce kural tabanlı imzalara bakar: GPU belleği, CUDA, RAM, model sunucusu 500, ağ, disk, eksik dosya, eksik paket. Bulduğu her sebebi, log'daki kanıt satırıyla birlikte yazar. Ollama varsa yerel bir LLM iki cümlelik özet de yazar. Ama **özet, log'da birebir geçen bir satırı alıntılamıyorsa atılır.** Model kanıtsız teşhis koyamaz.
-- **Şef** sabit kurallarla karar verir, model değil:
-  - Görev "geri alınabilir" işaretli değilse hiçbir şeye dokunmaz.
-  - Sebep kalıcıysa (dosya yok, disk dolu) yeniden denemenin anlamı yok, insana sorar.
-  - Yeniden deneme hakkı bitince insana sorar.
-- **Çare kataloğu (bilinen hatayı kendi düzeltme):** Yeniden başlatmadan önce teşhis bilinen bir imzaya uyuyorsa önceden yazılmış, geri alınabilir bir çare uygular. Sonra çarenin işe yaradığını **doğrular**. Doğrulanırsa işi yeniden başlatır ve sadece `KENDIM_DUZELTTIM.md` dosyasına rapor yazar. Doğrulanamazsa kör yeniden deneme yapmaz, insana sorar.
+- **Gözcü:** işin hâlini beş kelimeyle söylüyor.
+  - **Çalışıyor**
+  - **Bitti:** düzgün kapandı ve sonuç dosyası ortada.
+  - **Yeşil ama ölü:** "bitti" dedi ama dosya yok. En sinsi arıza bu.
+  - **Öldü:** hatayla kapandı.
+  - **Askıda:** program açık, ama uzun süredir hiçbir şey değişmiyor.
+- **Teşhis:** sebebi buluyor ve buldukça yanına kayıttan **kanıt satırını** koyuyor. Yapay zekâ isterse iki cümlelik bir özet de yazabiliyor, ama kayıtta birebir geçen bir satırı göstermiyorsa o özet çöpe gidiyor. Kanıtsız konuşmak yok.
+- **Şef:** son kararı veriyor. Bunu yapay zekâ değil, önceden yazdığım kurallar yapıyor. Bu bilinçli bir tercih:
+  - Bir işin "geri alınabilir" olduğunu ben söylemediysem hiçbir şeye dokunmuyor.
+  - Sebep kalıcıysa (dosya yok, disk dolu) boşuna denemiyor, bana soruyor.
+  - Deneme hakkı bittiyse yine bana soruyor.
+- **Çare kataloğu:** bilinen bir hatayı tanırsa yeniden başlatmadan önce önceden yazdığım bir çareyi uyguluyor. Sonra çarenin gerçekten işe yarayıp yaramadığını **kontrol ediyor**. İşe yaradıysa işi yeniden başlatıyor ve bana sadece `KENDIM_DUZELTTIM.md` dosyasında rapor bırakıyor. Yaramadıysa körlemesine tekrar denemiyor, bana soruyor.
 
   | Bilinen hata | Çare | Doğrulama |
   |---|---|---|
@@ -48,8 +48,10 @@ Kendi deneylerimde arka arkaya bunlar oldu:
   | RAM ya da GPU belleği yetmedi | Model sunucusunun tuttuğu belleği boşalt | Aynı |
   | Servis bağlantısı koptu | 30 sn bekle | Servis yanıt veriyor |
 
-  Çarelere LLM karar vermez. Bu, 2026'daki yaygın "kendi kendini onaran sistem" önerisiyle aynı: bilinen arıza için önceden onaylanmış, geri alınabilir ve doğrulanan eylem; yapay zekâ sadece teşhis ve yeni arıza için.
-- **Nabız:** nöbetçinin kendisi de ölebilir. Her turda `nabiz` dosyasına zaman yazar. `python nobetci.py durum <klasör>` komutu bunu **dışarıdan** kontrol eder; zamanlanmış görevle veya başka bir makineden çağrılması gerekir. İçeriden yapılan sağlık kontrolü, ölçtüğü şeyle birlikte ölür.
+  Çareye yapay zekâ karar vermiyor. Araştırınca gördüm ki bu, "kendi kendini onaran sistem" konusundaki yaygın önerinin ta kendisi: bilinen arızaya önceden onaylanmış, geri alınabilir ve sonucu kontrol edilen bir eylem uygulanıyor; yapay zekâ ise sadece teşhis ve yeni arızalar için kullanılıyor.
+- **Nabız:** Nöbetçi'nin kendisi de ölebilir, o yüzden her turda `nabiz` dosyasına saat yazıyor. `python nobetci.py durum <klasör>` komutu bunu **dışarıdan** kontrol ediyor. İçeriden yapılan sağlık kontrolü, ölçtüğü şeyle birlikte ölür; bekçiyi de bir başkasının kontrol etmesi gerekiyor.
+
+Kısacası: bilinen dertleri kendi çözüyor, yeni ya da riskli bir şey olduğunda beni çağırıyor.
 
 ## Kullanım
 
