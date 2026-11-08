@@ -1,6 +1,6 @@
 # Nöbetçi: sessizce ölen işleri yakalayan bekçi
 
-> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. 16 failure-scenario tests; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents.
+> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. 17 failure-scenario tests; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents. Full English version: [README.en.md](README.en.md).
 
 Akşam uzun bir deney başlatıyorum, sabah kalkıp bakıyorum: ya bitmiş, ya da gece yarısı bir yerde ölmüş ve kimse bana haber vermemiş. Ekrana bir hata düşmüş ama okuyan olmamış. Ya da program "bitti" deyip kapanmış ama yazması gereken dosya ortada yok.
 
@@ -58,7 +58,7 @@ Kısacası: bilinen dertleri kendi çözüyor, yeni ya da riskli bir şey olduğ
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # görevleri başlat ve izle
 python nobetci.py durum ornek/durum                    # nöbetçi yaşıyor mu? (0 = tamam, 1 = alarm)
-python tests/test_nobetci.py                           # 16 arıza senaryosu
+python tests/test_nobetci.py                           # 17 arıza senaryosu
 ```
 
 Görev tanımı (`ornek/ytfactory_senaryo.json`):
@@ -75,7 +75,7 @@ Görev tanımı (`ornek/ytfactory_senaryo.json`):
 }
 ```
 
-İzlenen programın kodu değiştirilmez. Nöbetçi'nin bilmesi gereken üç şey var: komut, log dosyası ve "bitti" sayılacak çıktı dosyası.
+İzlenen programın koduna dokunmak gerekmiyor. Nöbetçi'ye üç şey söylemek yetiyor: hangi komut çalışacak, kayıt nereye yazılacak ve hangi dosya oluşunca iş "bitti" sayılacak.
 
 ## Testler: her biri yaşanmış bir arıza
 
@@ -95,31 +95,32 @@ Görev tanımı (`ornek/ytfactory_senaryo.json`):
 14. Çare doğrulanamazsa → insana sorulur
 15. Geri alınamaz işte çare bile denenmez
 16. Ollama'nın topluluktaki bilinen bellek hatası ("model requires more system memory") tanınır
+17. Genel Python hatası, daha belirgin bir sebebin (500 gibi) üstüne yazamaz (ikinci gerçek olay)
 
-**Testlerin kendisinden bir ders (08.11):** Çare kataloğunu ilk eklediğimde eski bir test, gerçek çareyi tetikledi ve bilgisayardaki gerçek model sunucusunun belleğini boşalttı. O sırada arka planda başka bir ölçüm koşuyordu. Artık testlerde gerçek çareler devre dışı; testler gerçek servislere asla dokunmuyor.
+**Testlerin kendisinden çıkan ders (08.11):** Çare kataloğunu eklediğimde eski bir testim gerçek çareyi tetikledi ve bilgisayardaki gerçek model sunucusunun belleğini boşalttı. O sırada arka planda başka bir ölçüm koşuyordu. Testlerde gerçek çareleri kapattım; testler artık gerçek servislere hiç dokunmuyor.
 
 ## Gerçek kullanım: ilk gece (08.11)
 
-Nöbetçiyi ilk kez gerçek bir işin başına koydum: [ytfactory](https://github.com/emirhnnnk-lab/ytfactory) video ajanının senaryo ve sahne adımı (`ornek/ytfactory_senaryo.json`).
+Nöbetçi'yi ilk kez gerçek bir işin başına koydum: [ytfactory](https://github.com/emirhnnnk-lab/ytfactory) video ajanının senaryo ve sahne adımı (`ornek/ytfactory_senaryo.json`).
 
-- **15 dk 32 sn** sonra iş sıfırdan farklı bir kodla çıktı. Ajan sahne tarifini 3 denemede de doğrulamadan geçirememişti (bir satırda 3 vurgu vardı, kural en fazla 2'ye izin veriyor). Nöbetçi bunu `OLDU` olarak yakaladı ve yeniden denemek yerine insana sordu. Doğru karardı: aynı girdiyle yeniden denemek aynı sonucu verirdi.
-- **Ama nöbetçinin kendi teşhisi zayıftı.** Bu hata tipi imza listesinde yoktu. Nöbetçi sebebi tanımadığı halde "kalıcı görünüyor" yazdı ve kanıt satırı eklemedi. Düzeltme iki parça oldu:
-  1. Yeni imza: "model çıktısı doğrulamayı geçemedi". Bu sebep kalıcı sayılır, çünkü düzeltmek için prompt ya da kural değişikliği gerekir.
-  2. Tanınmayan bir ölümde nöbetçi artık **bilmediğini söylüyor** ve son log satırını kanıt olarak ekliyor.
+- **15 dakika 32 saniye** sonra iş hatayla kapandı. Video ajanı sahne tarifini 3 denemede de kontrolden geçirememişti: bir satırda 3 vurgu vardı, kural en fazla 2'ye izin veriyor. Nöbetçi bunu yakaladı ve yeniden denemek yerine bana sordu. Doğru karardı, çünkü aynı girdiyle yeniden denemek aynı sonucu verirdi.
+- **Ama kendi teşhisi zayıftı.** Bu hata tipini tanımıyordu. Tanımadığı halde "kalıcı görünüyor" diye uydurdu ve kanıt satırı koymadı. Teşhis eden de uydurabiliyormuş. İki şey düzelttim:
+  1. Yeni bir imza ekledim: "model çıktısı kontrolü geçemedi". Bu kalıcı bir sebep, çünkü düzeltmek için prompt ya da kural değiştirmek gerekiyor.
+  2. Tanımadığı bir ölümde artık **bilmediğini söylüyor** ve son kayıt satırını kanıt olarak koyuyor.
 
-  İki durum için test eklendi: 7b ve 7c.
-- Asıl hata ytfactory'deydi. Onarım katmanı vurgu sayısını düzeltmiyordu; bu ayrıca düzeltilecek.
+  İkisi için de test yazdım (11 ve 12).
+- Asıl hata video ajanındaydı: onarım adımı vurgu sayısını düzeltmiyordu. O ayrıca düzeltilecek.
 
-## İkinci gerçek olay: teşhis kuralının kendi hatası (08.11, 17:13)
-Destek ajanının tekrarlanabilirlik ölçümünü Nöbetçi'nin gözetiminde başlattım. 13. talepte model sunucusu `500` verdi; sebebi büyük ihtimalle aynı saatlerde benim bir testimin gerçek sunucunun belleğini boşaltmasıydı. Nöbetçi ölümü yakaladı, ama **yanlış karar verdi**: hatanın yanında genel "Python istisnası" (Traceback) imzası da eşleştiği için sebebi kalıcı sandı ve yeniden denemek yerine bana sordu.
+## İkinci gerçek olay: kuralın kendi hatası (08.11, 17:13)
+Destek ajanının tekrarlanabilirlik ölçümünü Nöbetçi'nin gözetiminde başlattım. 13. talepte model sunucusu `500` verdi. Sebebi büyük ihtimalle bendim: aynı saatlerde bir testim gerçek sunucunun belleğini boşaltmıştı. Nöbetçi ölümü yakaladı, ama **yanlış karar verdi**. Hatanın yanında Python'un genel hata satırı (Traceback) da vardı; onu da sebep sayınca durumu kalıcı sandı ve yeniden denemek yerine bana sordu.
 
-Düzeltme: genel imza, daha belirgin bir sebep bulunduğunda artık sebep sayılmıyor (test 17). Ölçüm, düzeltilmiş Nöbetçi ve gerçek çare kataloğu devredeyken yeniden başlatıldı.
+Düzeltme: daha belirgin bir sebep bulunduysa genel hata satırı artık sebep sayılmıyor (test 17). Ölçümü düzeltilmiş Nöbetçi ve gerçek çarelerle yeniden başlattım.
 
 ## Sınırlar
 
-- Kaldığı yerden devam etmeyi Nöbetçi yapmaz, izlenen işin kendisi yapmalı. Nöbetçi yeniden başlatırken `devam_bayragi` ile bir argüman ekleyebilir, örneğin `--devam`.
-- Teşhis imzaları benim karşılaştığım arızalarla sınırlı. Yeni bir arıza tipi `IMZALAR` listesine eklenir.
-- Tek makine. Dağıtık işleri izlemez.
+- Kaldığı yerden devam etmeyi Nöbetçi yapamıyor; bunu izlenen işin kendisi bilmeli. Nöbetçi yeniden başlatırken `devam_bayragi` ile `--devam` gibi bir argüman ekleyebiliyor.
+- Tanıdığı hatalar benim karşılaştığım arızalarla sınırlı. Yeni bir arıza tipi `IMZALAR` listesine ekleniyor, her yeni imza bir test istiyor.
+- Tek bilgisayarda çalışıyor; birden fazla makineye dağılmış işleri izlemiyor.
 
 ---
 Geliştiren: **Emirhan Karaca**
