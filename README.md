@@ -1,6 +1,6 @@
 # Nöbetçi — sessiz ölümü yakalayan izleme ajanı
 
-> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. 10 failure-scenario tests, all reproduced from real incidents.
+> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. 12 failure-scenario tests, all reproduced from real incidents.
 
 Uzun süren işler (model eğitimi, deney koşuları, video render'ı, gece çalışan ajanlar) çoğu zaman **gürültüsüz** ölür. Hata mesajı ekrana düşer ama kimse okumaz. Süreç ayakta görünür ama hiçbir şey yapmıyordur. Ya da "başarıyla" çıkar ama beklenen dosyayı yazmamıştır.
 
@@ -47,7 +47,7 @@ Kendi deneylerimde arka arkaya bunlar oldu:
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # görevleri başlat ve izle
 python nobetci.py durum ornek/durum                    # nöbetçi yaşıyor mu? (0 = tamam, 1 = alarm)
-python tests/test_nobetci.py                           # 10 arıza senaryosu
+python tests/test_nobetci.py                           # 12 arıza senaryosu
 ```
 
 Görev tanımı (`ornek/ytfactory_senaryo.json`):
@@ -78,6 +78,18 @@ Görev tanımı (`ornek/ytfactory_senaryo.json`):
 8. Geri alınamaz işe otomatik dokunulmaz
 9. Nöbetçinin nabzı eskirse dış kontrol alarm verir
 10. LLM, log'da olmayan bir satırı "alıntılarsa" ya da hiç alıntı yapmazsa özet reddedilir
+
+## Gerçek kullanım: ilk gece (08.11)
+
+Nöbetçiyi ilk kez gerçek bir işin başına koydum: [ytfactory](https://github.com/emirhnnnk-lab/ytfactory) video ajanının senaryo ve sahne adımı (`ornek/ytfactory_senaryo.json`).
+
+- **15 dk 32 sn** sonra iş sıfırdan farklı bir kodla çıktı. Ajan sahne tarifini 3 denemede de doğrulamadan geçirememişti (bir satırda 3 vurgu vardı, kural en fazla 2'ye izin veriyor). Nöbetçi bunu `OLDU` olarak yakaladı ve yeniden denemek yerine insana sordu. Doğru karardı: aynı girdiyle yeniden denemek aynı sonucu verirdi.
+- **Ama nöbetçinin kendi teşhisi zayıftı.** Bu hata tipi imza listesinde yoktu. Nöbetçi sebebi tanımadığı halde "kalıcı görünüyor" yazdı ve kanıt satırı eklemedi. Düzeltme iki parça oldu:
+  1. Yeni imza: "model çıktısı doğrulamayı geçemedi". Bu sebep kalıcı sayılır, çünkü düzeltmek için prompt ya da kural değişikliği gerekir.
+  2. Tanınmayan bir ölümde nöbetçi artık **bilmediğini söylüyor** ve son log satırını kanıt olarak ekliyor.
+
+  İki durum için test eklendi: 7b ve 7c.
+- Asıl hata ytfactory'deydi. Onarım katmanı vurgu sayısını düzeltmiyordu; bu ayrıca düzeltilecek.
 
 ## Sınırlar
 

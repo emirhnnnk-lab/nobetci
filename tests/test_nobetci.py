@@ -85,6 +85,23 @@ class Senaryolar(unittest.TestCase):
         cikti.unlink()
         self.assertEqual(N.dis_gozlem(g), N.ASKIDA)
 
+    # 7b) gerçek demo (08.11): ytfactory ajanı 3 denemede doğrulamayı geçemedi → kalıcı, yeniden deneme yok, kanıtlı
+    def test_dogrulama_gecilemedi(self):
+        g = self.gorev("ytf", "import sys; sys.exit(\"sahne: 3 denemede geçerli çıktı yok, son hatalar: ['l2: 3 accents']\")",
+                       geri_alinabilir=True)
+        N.izle([g], self.defter, aralik=0.2)
+        o = [x for x in self.olaylar() if x["durum"] == N.OLDU]
+        self.assertEqual([x["karar"] for x in o], ["insana_sor"])
+        self.assertIn("doğrulamayı geçemedi", o[0]["teshis"]["bulgular"][0]["sebep"])
+
+    # 7c) tanınmayan ölüm "kalıcı" diye uydurulmaz; bilinmediği söylenir ve son satır kanıt olur
+    def test_taninmayan_sebep(self):
+        g = self.gorev("garip", "import sys; print('zort'); sys.exit(3)")
+        N.izle([g], self.defter, aralik=0.2)
+        b = self.olaylar()[-1]["teshis"]["bulgular"][0]
+        self.assertIn("Tanınmayan", b["sebep"])
+        self.assertEqual(b["kanit"], "zort")
+
     # 8) geri alınamaz işe asla otomatik dokunulmaz
     def test_geri_alinamaz_ise_dokunulmaz(self):
         g = self.gorev("yayin", "import sys; print('ConnectionResetError'); sys.exit(1)", geri_alinabilir=False)

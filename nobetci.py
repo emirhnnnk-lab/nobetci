@@ -88,6 +88,7 @@ IMZALAR = [
     (r"No space left on device", "Disk doldu", False),
     (r"FileNotFoundError|No such file or directory", "Dosya bulunamadı", False),
     (r"ModuleNotFoundError|ImportError", "Eksik paket", False),
+    (r"denemede geçerli çıktı yok|no valid output after", "Model çıktısı doğrulamayı geçemedi (prompt/kural düzeltmesi gerekir)", False),
     (r"Traceback \(most recent call last\)", "Python istisnası", False),
 ]
 
@@ -134,6 +135,10 @@ def teshis(g: Gorev, durum: str, llm_model: str | None = None) -> dict:
     if durum == ASKIDA and not bulgular:
         bulgular.append({"sebep": f"{g.sessizlik_sn} sn boyunca hiçbir ilerleme yok (kilitlenme/sonsuz bekleme)",
                          "gecici": True, "kanit": (satirlar[-1].strip()[:300] if satirlar else "(log boş)")})
+    if durum == OLDU and not bulgular:
+        # tanınmayan ölüm: "kalıcı" diye uydurma; bilinmediğini söyle ve son satırı kanıt olarak ver
+        bulgular.append({"sebep": "Tanınmayan sebep (imza listesinde yok) — son log satırına bak", "gecici": False,
+                         "kanit": (satirlar[-1].strip()[:300] if satirlar else "(log boş)")})
     if durum == YESIL_AMA_OLU:
         bulgular.insert(0, {"sebep": "Süreç başarıyla çıktı ama beklenen çıktı dosyası yok", "gecici": False,
                             "kanit": f"beklenen: {g.cikti}"})
