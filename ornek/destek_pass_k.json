@@ -1,0 +1,17 @@
+{
+  "defter": "ornek/durum_passk",
+  "aralik_sn": 15,
+  "gorevler": [
+    {
+      "ad": "destek-pass-k-t0.7",
+      "komut": ["python", "eval/pass_k.py", "5"],
+      "cwd": "C:/Users/emirh/OneDrive/Desktop/kariyer/portfolyo/destek-talebi-ajani",
+      "env": {"DESTEK_TEMP": "0.7"},
+      "log": "ornek/loglar/destek-pass-k.log",
+      "cikti": "C:/Users/emirh/OneDrive/Desktop/kariyer/portfolyo/destek-talebi-ajani/eval/pass_k_sonuc_t0.7.json",
+      "sessizlik_sn": 600,
+      "geri_alinabilir": true,
+      "yeniden_hak": 2
+    }
+  ]
+}

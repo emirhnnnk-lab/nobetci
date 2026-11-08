@@ -21,6 +21,14 @@ class Senaryolar(unittest.TestCase):
     def setUp(self):
         self.d = Path(tempfile.mkdtemp())
         self.defter = N.Defter(str(self.d / "durum"))
+        # Testler gerçek servislere (Ollama vb.) ASLA dokunmaz: gerçek çareler testte devre dışı.
+        # (08.11'de bir test gerçek model sunucusunu boşalttı; bu satır o yüzden var.)
+        self._careler = dict(N.CARELER)
+        N.CARELER.clear()
+
+    def tearDown(self):
+        N.CARELER.clear()
+        N.CARELER.update(self._careler)
 
     def gorev(self, ad, kod, **k):
         return N.Gorev(ad=ad, komut=is_(kod), log=str(self.d / f"{ad}.log"), cwd=str(self.d), **k)
@@ -101,6 +109,58 @@ class Senaryolar(unittest.TestCase):
         b = self.olaylar()[-1]["teshis"]["bulgular"][0]
         self.assertIn("Tanınmayan", b["sebep"])
         self.assertEqual(b["kanit"], "zort")
+
+    # 13) bilinen hata + geri alınabilir iş: nöbetçi çareyi uygular, doğrular, yeniden başlatır ve sadece raporlar
+    def test_bilinen_hatayi_kendi_duzeltir(self):
+        isaret = self.d / "bellek_bos"
+        eski = dict(N.CARELER)
+        N.CARELER["Model sunucusu 500 verdi (çoğunlukla bellek baskısı)"] = (
+            lambda: (isaret.write_text("1"), "sahte: 2 model boşaltıldı")[1], lambda: isaret.exists(), "Bellekteki modelleri boşalt")
+        try:
+            # iş, bellek boşaltılmadıysa 500 ile ölür; boşaltıldıysa başarıyla biter
+            kod = (f"import sys,pathlib; b=pathlib.Path(r'{isaret}'); "
+                   f"(print('HTTP Error 500: Internal Server Error'), sys.exit(1)) if not b.exists() else open('ok','w').write('1')")
+            g = self.gorev("ollama", kod, cikti=str(self.d / "ok"), geri_alinabilir=True)
+            self.assertEqual(N.izle([g], self.defter, aralik=0.2), {"ollama": N.BITTI})
+            d = [o for o in self.olaylar() if "otomatik_duzeltme" in o][0]["otomatik_duzeltme"]
+            self.assertTrue(d["dogrulandi"])
+            self.assertTrue((self.d / "durum" / "KENDIM_DUZELTTIM.md").exists())
+            self.assertFalse((self.d / "durum" / "INSANA_SOR.md").exists())  # insana sorulmadı
+        finally:
+            N.CARELER.clear(); N.CARELER.update(eski)
+
+    # 14) çare uygulandı ama doğrulanamadı → kör yeniden deneme yok, insana sorulur
+    def test_care_dogrulanamazsa_insana_sorar(self):
+        eski = dict(N.CARELER)
+        N.CARELER["Model sunucusu 500 verdi (çoğunlukla bellek baskısı)"] = (lambda: "sahte", lambda: False, "Bellekteki modelleri boşalt")
+        try:
+            g = self.gorev("inatci", "import sys; print('HTTP Error 500'); sys.exit(1)", geri_alinabilir=True)
+            N.izle([g], self.defter, aralik=0.2)
+            son = self.olaylar()[-1]
+            self.assertEqual(son["karar"], "insana_sor")
+            self.assertIn("doğrulanamadı", son["gerekce"])
+        finally:
+            N.CARELER.clear(); N.CARELER.update(eski)
+
+    # 15) geri alınamaz işte çare bile denenmez
+    def test_geri_alinamaz_iste_care_denenmez(self):
+        cagrildi = []
+        eski = dict(N.CARELER)
+        N.CARELER["Model sunucusu 500 verdi (çoğunlukla bellek baskısı)"] = (lambda: cagrildi.append(1) or "x", lambda: True, "x")
+        try:
+            g = self.gorev("canli", "import sys; print('HTTP Error 500'); sys.exit(1)", geri_alinabilir=False)
+            N.izle([g], self.defter, aralik=0.2)
+            self.assertEqual(cagrildi, [])
+        finally:
+            N.CARELER.clear(); N.CARELER.update(eski)
+
+    # 16) güncel topluluk imzası: Ollama'nın bellek çöküşü tanınır ve geçici sayılır
+    def test_ollama_bellek_imzasi(self):
+        g = self.gorev("x", "")
+        Path(g.log).write_text("Error: model requires more system memory (9.1 GiB) than is available (4.2 GiB)\n", encoding="utf-8")
+        b = N.teshis(g, N.OLDU)["bulgular"][0]
+        self.assertEqual(b["sebep"], "Model sunucusu bellek yüzünden çöktü")
+        self.assertTrue(b["gecici"])
 
     # 8) geri alınamaz işe asla otomatik dokunulmaz
     def test_geri_alinamaz_ise_dokunulmaz(self):

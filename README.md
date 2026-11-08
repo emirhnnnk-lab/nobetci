@@ -1,6 +1,6 @@
 # Nöbetçi — sessiz ölümü yakalayan izleme ajanı
 
-> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. 12 failure-scenario tests, all reproduced from real incidents.
+> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. 16 failure-scenario tests; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents.
 
 Uzun süren işler (model eğitimi, deney koşuları, video render'ı, gece çalışan ajanlar) çoğu zaman **gürültüsüz** ölür. Hata mesajı ekrana düşer ama kimse okumaz. Süreç ayakta görünür ama hiçbir şey yapmıyordur. Ya da "başarıyla" çıkar ama beklenen dosyayı yazmamıştır.
 
@@ -40,6 +40,15 @@ Kendi deneylerimde arka arkaya bunlar oldu:
   - Görev "geri alınabilir" işaretli değilse hiçbir şeye dokunmaz.
   - Sebep kalıcıysa (dosya yok, disk dolu) yeniden denemenin anlamı yok, insana sorar.
   - Yeniden deneme hakkı bitince insana sorar.
+- **Çare kataloğu (bilinen hatayı kendi düzeltme):** Yeniden başlatmadan önce teşhis bilinen bir imzaya uyuyorsa önceden yazılmış, geri alınabilir bir çare uygular. Sonra çarenin işe yaradığını **doğrular**. Doğrulanırsa işi yeniden başlatır ve sadece `KENDIM_DUZELTTIM.md` dosyasına rapor yazar. Doğrulanamazsa kör yeniden deneme yapmaz, insana sorar.
+
+  | Bilinen hata | Çare | Doğrulama |
+  |---|---|---|
+  | Model sunucusu 500 / bellek yüzünden çöktü (Ollama) | Bellekteki modelleri boşalt (`keep_alive: 0`) | Sunucuda yüklü model kalmadı |
+  | RAM ya da GPU belleği yetmedi | Model sunucusunun tuttuğu belleği boşalt | Aynı |
+  | Servis bağlantısı koptu | 30 sn bekle | Servis yanıt veriyor |
+
+  Çarelere LLM karar vermez. Bu, 2026'daki yaygın "kendi kendini onaran sistem" önerisiyle aynı: bilinen arıza için önceden onaylanmış, geri alınabilir ve doğrulanan eylem; yapay zekâ sadece teşhis ve yeni arıza için.
 - **Nabız:** nöbetçinin kendisi de ölebilir. Her turda `nabiz` dosyasına zaman yazar. `python nobetci.py durum <klasör>` komutu bunu **dışarıdan** kontrol eder; zamanlanmış görevle veya başka bir makineden çağrılması gerekir. İçeriden yapılan sağlık kontrolü, ölçtüğü şeyle birlikte ölür.
 
 ## Kullanım
@@ -47,7 +56,7 @@ Kendi deneylerimde arka arkaya bunlar oldu:
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # görevleri başlat ve izle
 python nobetci.py durum ornek/durum                    # nöbetçi yaşıyor mu? (0 = tamam, 1 = alarm)
-python tests/test_nobetci.py                           # 12 arıza senaryosu
+python tests/test_nobetci.py                           # 16 arıza senaryosu
 ```
 
 Görev tanımı (`ornek/ytfactory_senaryo.json`):
@@ -78,6 +87,14 @@ Görev tanımı (`ornek/ytfactory_senaryo.json`):
 8. Geri alınamaz işe otomatik dokunulmaz
 9. Nöbetçinin nabzı eskirse dış kontrol alarm verir
 10. LLM, log'da olmayan bir satırı "alıntılarsa" ya da hiç alıntı yapmazsa özet reddedilir
+11. Model çıktısı doğrulamayı geçemedi → kalıcı sayılır, yeniden denenmez (ilk gecenin arızası)
+12. Tanınmayan ölüm → "bilmiyorum" + son satır kanıt
+13. **Bilinen hata (500) → çare uygulanır, doğrulanır, iş yeniden başlar ve biter; insana sorulmaz, rapora yazılır**
+14. Çare doğrulanamazsa → insana sorulur
+15. Geri alınamaz işte çare bile denenmez
+16. Ollama'nın topluluktaki bilinen bellek hatası ("model requires more system memory") tanınır
+
+**Testlerin kendisinden bir ders (08.11):** Çare kataloğunu ilk eklediğimde eski bir test, gerçek çareyi tetikledi ve bilgisayardaki gerçek model sunucusunun belleğini boşalttı. O sırada arka planda başka bir ölçüm koşuyordu. Artık testlerde gerçek çareler devre dışı; testler gerçek servislere asla dokunmuyor.
 
 ## Gerçek kullanım: ilk gece (08.11)
 

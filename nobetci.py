@@ -43,6 +43,7 @@ class Gorev:
     geri_alinabilir: bool = False         # True ise şef insana sormadan yeniden başlatabilir
     yeniden_hak: int = 2
     devam_bayragi: list[str] = field(default_factory=list)  # yeniden başlatırken eklenecek argümanlar (ör. --devam)
+    env: dict = field(default_factory=dict)  # göreve özel ortam değişkenleri
 
 
 # ---------------------------------------------------------------- gözcü
@@ -80,8 +81,10 @@ def dis_gozlem(g: Gorev, simdi: float | None = None) -> str:
 # ---------------------------------------------------------------- teşhis
 # (desen, sebep, geçici_mi) — geçici olanlar yeniden denemeyle düzelebilir
 IMZALAR = [
-    (r"CUDA out of memory|OutOfMemoryError|CUBLAS_STATUS_ALLOC_FAILED", "GPU belleği yetmedi", True),
+    (r"CUDA out of memory|CUDA error: out of memory|OutOfMemoryError|CUBLAS_STATUS_ALLOC_FAILED", "GPU belleği yetmedi", True),
     (r"CUDA error|device-side assert", "CUDA hatası", True),
+    # Ollama'nın bilinen bellek hataları (topluluk issue'larında en sık görülenler)
+    (r"model requires more system memory|llama runner process has terminated", "Model sunucusu bellek yüzünden çöktü", True),
     (r"MemoryError|Cannot allocate memory|std::bad_alloc", "RAM yetmedi", True),
     (r"HTTP Error 500|status code 500|Internal Server Error", "Model sunucusu 500 verdi (çoğunlukla bellek baskısı)", True),
     (r"Connection refused|ConnectionResetError|URLError|timed out|TimeoutError", "Ağ/servis bağlantısı koptu", True),
@@ -184,6 +187,69 @@ def sef_karari(g: Gorev, t: dict, kullanilan_hak: int) -> dict:
     return {"karar": "yeniden_baslat", "gerekce": "Geçici sebep, geri alınabilir iş, hak var."}
 
 
+# ---------------------------------------------------------------- çare kataloğu (bilinen hatayı kendi düzeltme)
+# Kural: yalnızca imza eşleşmesi kesinse, çare geri alınabilirse ve sonrasında doğrulanabiliyorsa otomatik.
+# LLM burada karar vermez; çareler önceden yazılmış, sınırlı eylemlerdir. Her uygulama rapora düşer.
+OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+
+
+def _ollama(yol: str, veri: dict | None = None, timeout: int = 30):
+    r = urllib.request.Request(OLLAMA + yol, data=json.dumps(veri).encode() if veri is not None else None,
+                               headers={"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(r, timeout=timeout).read() or b"{}")
+
+
+def ollama_bosalt() -> str:
+    """Bellekteki modelleri boşaltır (keep_alive=0). Geri alınabilir: model bir sonraki istekte yeniden yüklenir."""
+    yuklu = [m["name"] for m in _ollama("/api/ps").get("models", [])]
+    for m in yuklu:
+        _ollama("/api/generate", {"model": m, "keep_alive": 0}, timeout=60)
+    return f"{len(yuklu)} model bellekten çıkarıldı: {', '.join(yuklu) or '-'}"
+
+
+def ollama_bos_mu() -> bool:
+    return not _ollama("/api/ps").get("models")
+
+
+def ollama_ayakta_mi() -> bool:
+    try:
+        _ollama("/api/tags", timeout=10)
+        return True
+    except Exception:
+        return False
+
+
+def bekle_ve_bak(sn: int = 30):
+    def eylem() -> str:
+        time.sleep(sn)
+        return f"{sn} sn beklendi"
+    return eylem
+
+
+# sebep → (eylem, doğrulama, açıklama). Testler bu sözlüğü sahte fonksiyonlarla değiştirebilir.
+CARELER: dict = {
+    "Model sunucusu 500 verdi (çoğunlukla bellek baskısı)": (ollama_bosalt, ollama_bos_mu, "Bellekteki modelleri boşalt"),
+    "Model sunucusu bellek yüzünden çöktü": (ollama_bosalt, ollama_bos_mu, "Bellekteki modelleri boşalt"),
+    "RAM yetmedi": (ollama_bosalt, ollama_bos_mu, "Model sunucusunun tuttuğu RAM'i boşalt"),
+    "GPU belleği yetmedi": (ollama_bosalt, ollama_bos_mu, "Model sunucusunun tuttuğu GPU belleğini boşalt"),
+    "Ağ/servis bağlantısı koptu": (bekle_ve_bak(30), ollama_ayakta_mi, "Bekle, servis geri geldi mi bak"),
+}
+
+
+def care_uygula(t: dict) -> dict | None:
+    """Teşhisteki ilk bulguya uyan çareyi uygular ve doğrular. Uyan çare yoksa None."""
+    for b in t.get("bulgular", []):
+        if b["sebep"] in CARELER:
+            eylem, dogrula, aciklama = CARELER[b["sebep"]]
+            try:
+                ne = eylem()
+                ok = bool(dogrula())
+            except Exception as e:  # çarenin kendisi patlarsa: düzeltilmiş sayılmaz
+                ne, ok = f"çare uygulanamadı: {type(e).__name__}: {e}", False
+            return {"sebep": b["sebep"], "care": aciklama, "yapilan": ne, "dogrulandi": ok}
+    return None
+
+
 # ---------------------------------------------------------------- olay defteri + nabız
 class Defter:
     def __init__(self, klasor: str):
@@ -201,7 +267,13 @@ class Defter:
                     f.write(f"- **{b['sebep']}** — kanıt: `{b['kanit']}`\n")
                 if olay.get("teshis", {}).get("ozet"):
                     f.write(f"- Özet: {olay['teshis']['ozet']}\n")
-        print(f"[{olay['zaman']}] {olay['gorev']}: {olay['durum']} → {olay.get('karar', '')}", flush=True)
+        d = olay.get("otomatik_duzeltme")
+        if d:  # kendi düzelttiği her şeyi raporlar; insana sormaz ama saklamaz da
+            with (self.k / "KENDIM_DUZELTTIM.md").open("a", encoding="utf-8") as f:
+                f.write(f"\n## {olay['zaman']} · {olay['gorev']}\n- Sebep: **{d['sebep']}**\n- Çare: {d['care']} → {d['yapilan']}\n"
+                        f"- Doğrulandı: {'evet, iş yeniden başlatıldı' if d['dogrulandi'] else 'HAYIR, insana soruldu'}\n")
+        print(f"[{olay['zaman']}] {olay['gorev']}: {olay['durum']} → {olay.get('karar', '')}"
+              + (f" (çare: {d['care']}, doğrulandı={d['dogrulandi']})" if d else ""), flush=True)
 
     def nabiz(self):
         (self.k / "nabiz").write_text(str(time.time()))
@@ -226,7 +298,7 @@ def baslat(g: Gorev, ek: list[str] | None = None) -> subprocess.Popen:
     Path(g.log).parent.mkdir(parents=True, exist_ok=True)
     with open(g.log, "a", encoding="utf-8") as f:  # çocuk süreç tanıtıcıyı devralır; bizdeki kopya kapanır
         return subprocess.Popen(g.komut + (ek or []), cwd=g.cwd, stdout=f, stderr=subprocess.STDOUT,
-                                env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"})
+                                env={**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", **g.env})
 
 
 def izle(gorevler: list[Gorev], defter: Defter, aralik: float = 15, llm_model: str | None = None,
@@ -255,7 +327,12 @@ def izle(gorevler: list[Gorev], defter: Defter, aralik: float = 15, llm_model: s
                 p.wait()
             t = teshis(g, durum, llm_model) if durum != BITTI else {"durum": BITTI, "bulgular": []}
             k = sef_karari(g, t, hak[g.ad])
-            defter.yaz({"gorev": g.ad, "durum": durum, **k, "teshis": t})
+            duzeltme = None
+            if k["karar"] == "yeniden_baslat":
+                duzeltme = care_uygula(t)
+                if duzeltme and not duzeltme["dogrulandi"]:
+                    k = {"karar": "insana_sor", "gerekce": f"Bilinen çare ({duzeltme['care']}) uygulandı ama işe yaradığı doğrulanamadı."}
+            defter.yaz({"gorev": g.ad, "durum": durum, **k, "teshis": t, **({"otomatik_duzeltme": duzeltme} if duzeltme else {})})
             if k["karar"] == "yeniden_baslat":
                 hak[g.ad] += 1
                 surec[g.ad] = baslat(g, g.devam_bayragi)
