@@ -108,6 +108,11 @@ Nöbetçiyi ilk kez gerçek bir işin başına koydum: [ytfactory](https://githu
   İki durum için test eklendi: 7b ve 7c.
 - Asıl hata ytfactory'deydi. Onarım katmanı vurgu sayısını düzeltmiyordu; bu ayrıca düzeltilecek.
 
+## İkinci gerçek olay: teşhis kuralının kendi hatası (08.11, 17:13)
+Destek ajanının tekrarlanabilirlik ölçümünü Nöbetçi'nin gözetiminde başlattım. 13. talepte model sunucusu `500` verdi; sebebi büyük ihtimalle aynı saatlerde benim bir testimin gerçek sunucunun belleğini boşaltmasıydı. Nöbetçi ölümü yakaladı, ama **yanlış karar verdi**: hatanın yanında genel "Python istisnası" (Traceback) imzası da eşleştiği için sebebi kalıcı sandı ve yeniden denemek yerine bana sordu.
+
+Düzeltme: genel imza, daha belirgin bir sebep bulunduğunda artık sebep sayılmıyor (test 17). Ölçüm, düzeltilmiş Nöbetçi ve gerçek çare kataloğu devredeyken yeniden başlatıldı.
+
 ## Sınırlar
 
 - Kaldığı yerden devam etmeyi Nöbetçi yapmaz, izlenen işin kendisi yapmalı. Nöbetçi yeniden başlatırken `devam_bayragi` ile bir argüman ekleyebilir, örneğin `--devam`.

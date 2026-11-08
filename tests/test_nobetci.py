@@ -162,6 +162,16 @@ class Senaryolar(unittest.TestCase):
         self.assertEqual(b["sebep"], "Model sunucusu bellek yüzünden çöktü")
         self.assertTrue(b["gecici"])
 
+    # 17) gerçek olay (08.11 17:13): 500 hatası Traceback ile birlikte geldi, genel imza onu "kalıcı" yaptı
+    def test_traceback_belirgin_sebebi_ezmez(self):
+        g = self.gorev("x", "")
+        Path(g.log).write_text("Traceback (most recent call last):\n  File \"agent.py\", line 26\n"
+                               "httpx.HTTPStatusError: Server error '500 Internal Server Error' for url 'http://localhost:11434/api/chat'\n",
+                               encoding="utf-8")
+        t = N.teshis(g, N.OLDU)
+        self.assertEqual([b["sebep"] for b in t["bulgular"]], ["Model sunucusu 500 verdi (çoğunlukla bellek baskısı)"])
+        self.assertEqual(N.sef_karari(N.Gorev(ad="x", komut=[], log=g.log, geri_alinabilir=True), t, 0)["karar"], "yeniden_baslat")
+
     # 8) geri alınamaz işe asla otomatik dokunulmaz
     def test_geri_alinamaz_ise_dokunulmaz(self):
         g = self.gorev("yayin", "import sys; print('ConnectionResetError'); sys.exit(1)", geri_alinabilir=False)

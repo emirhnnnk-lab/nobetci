@@ -138,6 +138,10 @@ def teshis(g: Gorev, durum: str, llm_model: str | None = None) -> dict:
     if durum == ASKIDA and not bulgular:
         bulgular.append({"sebep": f"{g.sessizlik_sn} sn boyunca hiçbir ilerleme yok (kilitlenme/sonsuz bekleme)",
                          "gecici": True, "kanit": (satirlar[-1].strip()[:300] if satirlar else "(log boş)")})
+    # "Python istisnası" genel bir imzadır: her hatanın arkasında Traceback olur. Daha belirgin bir sebep
+    # bulunduysa onu sebep saymak teşhisi bozar (08.11: 500 hatası bu yüzden 'kalıcı' sanıldı).
+    if len(bulgular) > 1:
+        bulgular = [b for b in bulgular if b["sebep"] != "Python istisnası"]
     if durum == OLDU and not bulgular:
         # tanınmayan ölüm: "kalıcı" diye uydurma; bilinmediğini söyle ve son satırı kanıt olarak ver
         bulgular.append({"sebep": "Tanınmayan sebep (imza listesinde yok) — son log satırına bak", "gecici": False,
