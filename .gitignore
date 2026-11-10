@@ -1,3 +1,7 @@
 __pycache__/
 ornek/durum/
 ornek/loglar/
+# yerel çalıştırma defterleri ve kişisel yol içeren senaryolar
+ornek/durum_*/
+ornek/verim.json
+ornek/ytfactory_reklam.json
