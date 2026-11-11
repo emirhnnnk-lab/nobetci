@@ -1,6 +1,6 @@
 # Nöbetçi: sessizce ölen işleri yakalayan bekçi
 
-> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. One command wraps any job, no config file: `python nobetci.py calistir --cikti result.json -- <your command>`. 22 tests, 17 of them failure scenarios; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents. Full English version: [README.en.md](README.en.md).
+> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. One command wraps any job, no config file: `python nobetci.py calistir --cikti result.json -- <your command>`. 25 tests, 17 of them failure scenarios; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents. Full English version: [README.en.md](README.en.md).
 
 Akşam uzun bir deney başlatıyorum, sabah kalkıp bakıyorum: ya bitmiş, ya da gece yarısı bir yerde ölmüş ve kimse bana haber vermemiş. Ekrana bir hata düşmüş ama okuyan olmamış. Ya da program "bitti" deyip kapanmış ama yazması gereken dosya ortada yok.
 
@@ -84,12 +84,24 @@ Bu çıktı gerçek bir çalışmadan: canlı demolarımın açılıp açılmad�
 
 Her çalıştırmanın kaydı ayrı bir dosyaya yazılıyor, yani dünkü hata bugünkü teşhise karışmıyor. Bana sorulan her şey `.nobetci/INSANA_SOR.md` dosyasında birikiyor.
 
+### Haber verme (Telegram)
+
+Nöbetçi bana bir şey sorduğunda bunu bir dosyaya yazması yetmiyor; dosyaya bakmayı unutursam yine sabah öğreniyorum. O yüzden "bana sor" kararı çıktığında telefonuma Telegram mesajı atıyor: işin adı, sebep ve kanıt satırı. Biten ya da kendi düzelttiği iş için mesaj atmıyor.
+
+Kurulum bir kez: Telegram'da BotFather'dan bir bot açıp token'ı `~/.nobetci/telegram.json` dosyasına yapıştırıyorum, bota bir mesaj yazıyorum, sonra:
+
+```bash
+python nobetci.py telegram-kur    # sohbet numarasını bulur, dosyaya yazar, deneme mesajı atar
+```
+
+Token depoda durmuyor, kullanıcı klasöründe duruyor. Ayar yoksa bildirim sessizce kapalı kalıyor; Telegram'a ulaşılamazsa izleme durmuyor, deftere "gitmedi" yazılıyor. Mesajda kayıttan bir satır gittiği için, kayda şifre basan bir işte bunu açmam.
+
 Birden fazla işi birlikte izlemek için ayar dosyası hâlâ duruyor:
 
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # görevleri başlat ve izle
 python nobetci.py durum ornek/durum                    # nöbetçi yaşıyor mu? (0 = tamam, 1 = alarm)
-python tests/test_nobetci.py                           # 22 test
+python tests/test_nobetci.py                           # 25 test
 ```
 
 Görev tanımı (`ornek/ytfactory_senaryo.json`):
@@ -135,6 +147,14 @@ Tek komutla çalıştırma için:
 20. `--geri-alinabilir` ile geçici hata (500) → sormadan yeniden başlatır, iş biter
 21. Yanlış kullanım (komut yok, olmayan program) → hiçbir şey başlatılmaz, defter bile açılmaz
 22. Görev adı komuttan türetilir: yorumlayıcının değil, çalıştırılan dosyanın adı
+
+Haber verme için:
+
+23. Bana sorulan işte mesaj gider; içinde iş adı, sebep ve kanıt satırı vardır
+24. Biten iş için mesaj gitmez
+25. Ayar yoksa bildirim kapalıdır; Telegram'a ulaşılamazsa izleme çökmez
+
+Testler gerçek Telegram'a mesaj atmaz; mesajlar sahte bir kutuya düşer.
 
 ## Gerçek kullanım: ilk gece (08.11)
 

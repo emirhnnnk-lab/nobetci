@@ -25,8 +25,18 @@ class Senaryolar(unittest.TestCase):
         # (08.11'de bir test gerçek model sunucusunu boşalttı; bu satır o yüzden var.)
         self._careler = dict(N.CARELER)
         N.CARELER.clear()
+        # Aynı kural bildirim için: testler gerçek Telegram'a ASLA mesaj atmaz, sahte kutuya düşer.
+        self._bildir, self.kutu = N.bildir, []
+        N.bildir = lambda metin: self.kutu.append(metin) or True
+        self._ortam = {k: os.environ.pop(k, None) for k in ("NOBETCI_TELEGRAM_TOKEN", "NOBETCI_TELEGRAM_CHAT", "NOBETCI_AYAR")}
+        os.environ["NOBETCI_AYAR"] = str(self.d / "telegram.json")   # gerçek ayar dosyası testte görünmez
 
     def tearDown(self):
+        N.bildir = self._bildir
+        for k, v in self._ortam.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
         N.CARELER.clear()
         N.CARELER.update(self._careler)
 
@@ -237,6 +247,35 @@ class Senaryolar(unittest.TestCase):
         self.assertEqual(N.ad_uret(["python", "src/egit.py", "--tur", "5"]), "egit")
         self.assertEqual(N.ad_uret(["ffmpeg", "-i", "a.mp4"]), "ffmpeg")
         self.assertEqual(N.ad_uret([PY, "-c", "print(1)"]), "print-1")
+
+    # ---- bildirim: "insana sor" kararında haber gider; başka hiçbir durumda gitmez
+    # 23) insana sorulan iş: mesajda görev adı, sebep ve kanıt satırı var; deftere "gitti" yazılır
+    def test_insana_sorunca_bildirim_gider(self):
+        g = self.gorev("garip", "import sys; print('zort'); sys.exit(3)")
+        N.izle([g], self.defter, aralik=0.2)
+        self.assertEqual(len(self.kutu), 1)
+        for parca in ("garip", "Tanınmayan", "zort"):
+            self.assertIn(parca, self.kutu[0])
+        self.assertEqual(self.olaylar()[-1]["bildirim"], "gitti")
+
+    # 24) biten iş ve kendi düzelttiği iş için kimse rahatsız edilmez
+    def test_biten_is_bildirim_atmaz(self):
+        g = self.gorev("iyi", "open('sonuc.json','w').write('{}')", cikti=str(self.d / "sonuc.json"))
+        N.izle([g], self.defter, aralik=0.2)
+        self.assertEqual(self.kutu, [])
+
+    # 25) ayar yoksa bildirim sessizce kapalıdır; Telegram'a ulaşılamazsa da izleme çökmez
+    def test_bildirim_ayarsiz_ve_agsiz(self):
+        self.assertIsNone(N.bildirim_ayari())
+        self.assertFalse(self._bildir("deneme"))                       # ayar yok → False, ağa çıkılmaz
+        (self.d / "telegram.json").write_text('{"token": "sahte", "chat_id": "1"}', encoding="utf-8")
+        self.assertEqual(N.bildirim_ayari(), {"token": "sahte", "chat_id": "1"})
+        eski = N._telegram
+        N._telegram = lambda *a, **k: (_ for _ in ()).throw(OSError("ağ yok"))
+        try:
+            self.assertFalse(self._bildir("deneme"))                   # gönderilemedi → False, istisna yok
+        finally:
+            N._telegram = eski
 
 
 if __name__ == "__main__":

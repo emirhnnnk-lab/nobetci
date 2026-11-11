@@ -86,12 +86,18 @@ Each run gets its own log file, so yesterday's error cannot leak into today's di
 
 I added this on Nov 11 because I had not used Nöbetçi for three days: writing a config file per job was enough friction that I skipped it when in a hurry.
 
+### Notifications (Telegram)
+
+Writing "ask the human" into a file is not enough if I forget to open the file. When that decision is made, Nöbetçi sends a Telegram message to my phone: job name, cause and the evidence line. Finished or self-repaired jobs send nothing.
+
+Setup is one-time: create a bot with BotFather, paste the token into `~/.nobetci/telegram.json`, send the bot any message, then run `python nobetci.py telegram-kur` (finds the chat id, saves it, sends a test message). The token lives in the user folder, not in the repo. Without settings, notifications are silently off; if Telegram is unreachable, watching continues and the event log says the message was not delivered. Tests never send real messages.
+
 The config file is still there for watching several jobs together:
 
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # start and watch the jobs
 python nobetci.py durum ornek/durum                    # is the watchman alive? (0 = ok, 1 = alarm)
-python tests/test_nobetci.py                           # 22 tests (17 failure scenarios + 5 for the single command)
+python tests/test_nobetci.py                           # 25 tests (17 failure scenarios + 5 single command + 3 notifications)
 ```
 
 Job definition (`ornek/ytfactory_senaryo.json`):

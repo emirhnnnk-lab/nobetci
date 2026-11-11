@@ -255,6 +255,86 @@ def care_uygula(t: dict) -> dict | None:
     return None
 
 
+# ---------------------------------------------------------------- bildirim (Telegram)
+# Anahtar depoda DEĞİL: ortam değişkeninde ya da kullanıcı klasöründeki ~/.nobetci/telegram.json dosyasında durur.
+TELEGRAM = "https://api.telegram.org/bot{token}/{yontem}"
+
+
+def bildirim_dosyasi() -> Path:
+    return Path(os.environ.get("NOBETCI_AYAR") or Path.home() / ".nobetci" / "telegram.json")
+
+
+def bildirim_ayari() -> dict | None:
+    """Token ve sohbet numarası ikisi de varsa döner; yoksa None (bildirim kapalı, hata değil)."""
+    a = {"token": os.environ.get("NOBETCI_TELEGRAM_TOKEN", ""), "chat_id": os.environ.get("NOBETCI_TELEGRAM_CHAT", "")}
+    if not (a["token"] and a["chat_id"]):
+        try:
+            d = json.loads(bildirim_dosyasi().read_text(encoding="utf-8-sig"))
+            a = {"token": str(d.get("token", "")).strip(), "chat_id": str(d.get("chat_id", "")).strip()}
+        except Exception:
+            return None
+    return a if a["token"] and a["chat_id"] else None
+
+
+def _telegram(token: str, yontem: str, veri: dict | None = None) -> dict:
+    r = urllib.request.Request(TELEGRAM.format(token=token, yontem=yontem),
+                               data=json.dumps(veri or {}).encode(), headers={"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(r, timeout=20).read())
+
+
+def bildir(metin: str) -> bool:
+    """Telegram'a mesaj atar. Ayar yoksa ya da gönderilemezse False döner; izlemeyi asla durdurmaz."""
+    a = bildirim_ayari()
+    if not a:
+        return False
+    try:
+        return bool(_telegram(a["token"], "sendMessage", {"chat_id": a["chat_id"], "text": metin[:3500]}).get("ok"))
+    except Exception:
+        return False
+
+
+def bildirim_metni(olay: dict) -> str:
+    s = [f"🔔 Nöbetçi: {olay['gorev']} → {olay['durum']}", olay.get("gerekce", "")]
+    for b in olay.get("teshis", {}).get("bulgular", [])[:3]:
+        s.append(f"• {b['sebep']}\n  kanıt: {b['kanit'][:200]}")
+    return "\n".join(x for x in s if x)
+
+
+def telegram_kur() -> int:
+    """Kurulum yardımcısı: dosyadaki token'la sohbet numarasını bulur, dosyaya yazar, deneme mesajı atar.
+    Token'ı ekrana ASLA basmaz."""
+    p = bildirim_dosyasi()
+    if not p.exists():
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text('{\n  "token": "",\n  "chat_id": ""\n}\n', encoding="utf-8")
+    try:
+        d = json.loads(p.read_text(encoding="utf-8-sig"))
+    except Exception:
+        print(f"Ayar dosyası okunamadı (JSON bozuk): {p}")
+        return 2
+    token = str(d.get("token", "")).strip()
+    if not token:
+        print(f"Token boş. BotFather'dan aldığın token'ı şu dosyada \"token\" tırnaklarının içine yapıştır:\n  {p}")
+        return 2
+    if not str(d.get("chat_id", "")).strip():
+        try:
+            mesajlar = [u["message"] for u in _telegram(token, "getUpdates").get("result", []) if "message" in u]
+        except Exception as e:
+            print(f"Telegram'a ulaşılamadı ya da token geçersiz ({type(e).__name__}).")
+            return 1
+        if not mesajlar:
+            print("Bot henüz mesaj almamış. Telegram'da botuna herhangi bir şey yaz (ör. 'selam'), sonra yeniden dene.")
+            return 1
+        d["chat_id"] = str(mesajlar[-1]["chat"]["id"])
+        p.write_text(json.dumps({"token": token, "chat_id": d["chat_id"]}, indent=2) + "\n", encoding="utf-8")
+        print("Sohbet numarası bulundu ve dosyaya yazıldı.")
+    if bildir("✅ Nöbetçi bağlandı. Bir iş 'insana sor' derse haber buradan gelecek."):
+        print("Deneme mesajı gönderildi; telefonuna bak.")
+        return 0
+    print("Deneme mesajı gönderilemedi (token ya da sohbet numarası yanlış olabilir).")
+    return 1
+
+
 # ---------------------------------------------------------------- olay defteri + nabız
 class Defter:
     def __init__(self, klasor: str):
@@ -263,6 +343,8 @@ class Defter:
 
     def yaz(self, olay: dict):
         olay = {"zaman": time.strftime("%Y-%m-%d %H:%M:%S"), **olay}
+        if olay.get("karar") == "insana_sor":   # haber verildi mi, deftere de yazılır
+            olay["bildirim"] = "gitti" if bildir(bildirim_metni(olay)) else ("gitmedi" if bildirim_ayari() else "kapali")
         with (self.k / "olaylar.jsonl").open("a", encoding="utf-8") as f:
             f.write(json.dumps(olay, ensure_ascii=False) + "\n")
         if olay.get("karar") == "insana_sor":
@@ -428,6 +510,8 @@ def calistir(argv: list[str]) -> int:
         for b in son.get("teshis", {}).get("bulgular", []):
             print(f"  sebep: {b['sebep']}\n  kanıt: {b['kanit']}")
         print(f"  rapor: {klasor / 'INSANA_SOR.md'}")
+        if son.get("bildirim"):
+            print(f"  haber: Telegram bildirimi {son['bildirim']}")
     return 0 if durum == BITTI else 1
 
 
@@ -444,6 +528,8 @@ if __name__ == "__main__":
     konsol_utf8()
     if len(sys.argv) >= 2 and sys.argv[1] == "calistir":
         sys.exit(calistir(sys.argv[2:]))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "telegram-kur":
+        sys.exit(telegram_kur())
     elif len(sys.argv) >= 3 and sys.argv[1] == "izle":
         ayar = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
         sonuc = izle(yukle(sys.argv[2]), Defter(ayar.get("defter", "durum")), ayar.get("aralik_sn", 15), ayar.get("llm"))
