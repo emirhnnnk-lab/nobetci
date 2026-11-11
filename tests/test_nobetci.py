@@ -193,6 +193,52 @@ class Senaryolar(unittest.TestCase):
         self.assertFalse(N.alinti_gecerli('Sebep "disk quota exceeded on /mnt/data" hatası.', log))
         self.assertFalse(N.alinti_gecerli("Muhtemelen bellek sorunu.", log))  # kanıtsız iddia da geçmez
 
+    # ---- tek komut (calistir): ayar dosyası yazmadan aynı kurallar
+    def calistir(self, *secenek, kod):
+        return N.calistir(["--klasor", str(self.d / "nb"), "--aralik", "0.2", *secenek, "--", PY, "-c", kod])
+
+    def nb_olaylar(self):
+        return [json.loads(s) for s in (self.d / "nb" / "olaylar.jsonl").read_text(encoding="utf-8").splitlines()]
+
+    # 18) tek komut, başarılı iş: çıkış 0, defter ve çalıştırmaya özel log kendiliğinden oluşur
+    def test_calistir_basarili(self):
+        cikti = self.d / "sonuc.json"
+        self.assertEqual(self.calistir("--cikti", str(cikti), "--ad", "deney",
+                                       kod=f"open(r'{cikti}','w').write('{{}}'); print('tamam')"), 0)
+        self.assertEqual(self.nb_olaylar()[-1]["durum"], N.BITTI)
+        loglar = list((self.d / "nb" / "loglar").glob("deney-*.log"))
+        self.assertEqual(len(loglar), 1)
+        self.assertIn("tamam", loglar[0].read_text(encoding="utf-8"))
+
+    # 19) tek komut, "yeşil ama ölü": çıkış kodu 0 olsa da nöbetçi 1 döner ve insana sorar
+    def test_calistir_yesil_ama_olu(self):
+        self.assertEqual(self.calistir("--cikti", str(self.d / "yok.json"), kod="print('bitti sanıyorum')"), 1)
+        self.assertEqual(self.nb_olaylar()[-1]["karar"], "insana_sor")
+        self.assertTrue((self.d / "nb" / "INSANA_SOR.md").exists())
+
+    # 20) tek komut + --geri-alinabilir: geçici hatada (500) sormadan yeniden başlatır, iş biter
+    def test_calistir_gecici_hatada_yeniden_baslatir(self):
+        sayac, ok = self.d / "sayac", self.d / "ok"
+        kod = (f"import sys,pathlib; p=pathlib.Path(r'{sayac}'); n=int(p.read_text()) if p.exists() else 0; "
+               f"p.write_text(str(n+1)); "
+               f"(print('HTTP Error 500: Internal Server Error'), sys.exit(1)) if n<1 else open(r'{ok}','w').write('1')")
+        self.assertEqual(self.calistir("--cikti", str(ok), "--geri-alinabilir", kod=kod), 0)
+        self.assertEqual([o["karar"] for o in self.nb_olaylar() if o["durum"] != "BASLADI"], ["yeniden_baslat", "kapat"])
+
+    # 21) yanlış kullanım hiçbir şey başlatmaz: komut yok / olmayan program → 2, defter bile açılmaz
+    def test_calistir_yanlis_kullanim(self):
+        self.assertEqual(N.calistir(["--cikti", "x.json"]), 2)                       # '--' yok
+        self.assertEqual(N.calistir(["--klasor", str(self.d / "nb"), "--"]), 2)      # komut boş
+        self.assertEqual(N.calistir(["--klasor", str(self.d / "nb"), "--", "boyle-bir-program-yok-xyz"]), 2)
+        self.assertFalse((self.d / "nb").exists())
+
+    # 22) görev adı komuttan türetilir: yorumlayıcı değil, çalıştırılan dosya
+    def test_ad_uret(self):
+        self.assertEqual(N.ad_uret(["python", "src/egit.py", "--tur", "5"]), "egit")
+        self.assertEqual(N.ad_uret(["ffmpeg", "-i", "a.mp4"]), "ffmpeg")
+        self.assertEqual(N.ad_uret([PY, "-c", "print(1)"]), "print-1")
+
 
 if __name__ == "__main__":
+    N.konsol_utf8()
     unittest.main(verbosity=2)

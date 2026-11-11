@@ -57,10 +57,41 @@ In short: it fixes the known problems itself, and calls me when something new or
 
 ## Usage
 
+The shortest way is a single command. No config file; I put Nöbetçi in front of the command I want to run:
+
+```bash
+python nobetci.py calistir --cikti result.json -- python experiment.py --rounds 5
+```
+
+Everything after `--` is my command, run as is. `--cikti` is the file the job must write when it finishes; Nöbetçi decides "done" by looking at it. It prints a short summary and returns its own exit code: 0 if the job really finished, 1 if not. If the program exits "successfully" but the file is missing, it still returns 1.
+
+```
+Nöbetçi: demo_kontrol → BITTI (4 sn)
+  log:   .nobetci/loglar/demo_kontrol-20261111-170235.log
+  çıktı: demo_raporu.json
+```
+
+This output is from a real run: a small script that checks whether my live demos respond (`ornek/demo_kontrol.py`), run under Nöbetçi. All four addresses answered. Note that the script only checks the HTTP response; it does not prove a demo actually answers questions.
+
+| Option | What it does |
+|---|---|
+| `--cikti FILE` | The job counts as done only when this file exists. Without it, only the exit code is checked, and the summary says so |
+| `--geri-alinabilir` | "Reversible": on a transient failure it may restart without asking me. Without it, it touches nothing |
+| `--hak N` | How many restarts are allowed (default 2) |
+| `--devam "--resume"` | Argument added to the command on restart |
+| `--sessizlik SEC` | Seconds without any change before the job counts as stuck (default 600) |
+| `--ad`, `--klasor` | Job name and the folder for records (default `.nobetci`) |
+
+Each run gets its own log file, so yesterday's error cannot leak into today's diagnosis. Everything escalated to me accumulates in `.nobetci/INSANA_SOR.md`.
+
+I added this on Nov 11 because I had not used Nöbetçi for three days: writing a config file per job was enough friction that I skipped it when in a hurry.
+
+The config file is still there for watching several jobs together:
+
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # start and watch the jobs
 python nobetci.py durum ornek/durum                    # is the watchman alive? (0 = ok, 1 = alarm)
-python tests/test_nobetci.py                           # 17 failure scenarios
+python tests/test_nobetci.py                           # 22 tests (17 failure scenarios + 5 for the single command)
 ```
 
 Job definition (`ornek/ytfactory_senaryo.json`):

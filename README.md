@@ -1,6 +1,6 @@
 # Nöbetçi: sessizce ölen işleri yakalayan bekçi
 
-> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. 17 failure-scenario tests; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents. Full English version: [README.en.md](README.en.md).
+> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. One command wraps any job, no config file: `python nobetci.py calistir --cikti result.json -- <your command>`. 22 tests, 17 of them failure scenarios; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents. Full English version: [README.en.md](README.en.md).
 
 Akşam uzun bir deney başlatıyorum, sabah kalkıp bakıyorum: ya bitmiş, ya da gece yarısı bir yerde ölmüş ve kimse bana haber vermemiş. Ekrana bir hata düşmüş ama okuyan olmamış. Ya da program "bitti" deyip kapanmış ama yazması gereken dosya ortada yok.
 
@@ -57,10 +57,39 @@ Kısacası: bilinen dertleri kendi çözüyor, yeni ya da riskli bir şey olduğ
 
 ## Kullanım
 
+En kısa yol tek komut. Ayar dosyası yazmak gerekmiyor; çalıştıracağım komutun başına Nöbetçi'yi koyuyorum:
+
+```bash
+python nobetci.py calistir --cikti sonuc.json -- python deney.py --tur 5
+```
+
+`--` işaretinden sonrası benim komutum, olduğu gibi çalışıyor. `--cikti`, işin bitince yazması gereken dosya; Nöbetçi "bitti" kararını ona bakarak veriyor. Bitince kısa bir özet basıyor ve kendi çıkış kodunu veriyor: iş gerçekten bittiyse 0, bitmediyse 1. Program "başarılı" deyip kapansa bile dosya yoksa 1 dönüyor.
+
+```
+Nöbetçi: demo_kontrol → BITTI (4 sn)
+  log:   .nobetci/loglar/demo_kontrol-20261111-170235.log
+  çıktı: demo_raporu.json
+```
+
+Bu çıktı gerçek bir çalışmadan: canlı demolarımın açılıp açılmadığına bakan küçük betiği (`ornek/demo_kontrol.py`) Nöbetçi altında çalıştırdım, dört adres de cevap verdi.
+
+| Seçenek | Ne işe yarıyor |
+|---|---|
+| `--cikti DOSYA` | İş ancak bu dosya oluşunca bitmiş sayılır. Vermezsem yalnız çıkış koduna bakıyor ve bunu özette söylüyor |
+| `--geri-alinabilir` | Geçici bir hatada bana sormadan yeniden başlatabilir. Vermezsem hiçbir şeye dokunmuyor |
+| `--hak N` | Kaç kez yeniden deneyebilir (varsayılan 2) |
+| `--devam "--devam"` | Yeniden başlatırken komuta eklenecek argüman |
+| `--sessizlik SN` | Bu kadar saniye hiçbir şey değişmezse "askıda" sayar (varsayılan 600) |
+| `--ad`, `--klasor` | Görev adı ve kayıtların yazılacağı klasör (varsayılan `.nobetci`) |
+
+Her çalıştırmanın kaydı ayrı bir dosyaya yazılıyor, yani dünkü hata bugünkü teşhise karışmıyor. Bana sorulan her şey `.nobetci/INSANA_SOR.md` dosyasında birikiyor.
+
+Birden fazla işi birlikte izlemek için ayar dosyası hâlâ duruyor:
+
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # görevleri başlat ve izle
 python nobetci.py durum ornek/durum                    # nöbetçi yaşıyor mu? (0 = tamam, 1 = alarm)
-python tests/test_nobetci.py                           # 17 arıza senaryosu
+python tests/test_nobetci.py                           # 22 test
 ```
 
 Görev tanımı (`ornek/ytfactory_senaryo.json`):
@@ -99,6 +128,14 @@ Görev tanımı (`ornek/ytfactory_senaryo.json`):
 16. Ollama'nın topluluktaki bilinen bellek hatası ("model requires more system memory") tanınır
 17. Genel Python hatası, daha belirgin bir sebebin (500 gibi) üstüne yazamaz (ikinci gerçek olay)
 
+Tek komutla çalıştırma için:
+
+18. Tek komut, başarılı iş → 0 döner; defter ve o çalıştırmaya özel kayıt kendiliğinden oluşur
+19. Tek komutta "yeşil ama ölü" → program 0 ile kapansa da Nöbetçi 1 döner ve bana sorar
+20. `--geri-alinabilir` ile geçici hata (500) → sormadan yeniden başlatır, iş biter
+21. Yanlış kullanım (komut yok, olmayan program) → hiçbir şey başlatılmaz, defter bile açılmaz
+22. Görev adı komuttan türetilir: yorumlayıcının değil, çalıştırılan dosyanın adı
+
 ## Gerçek kullanım: ilk gece (08.11)
 
 Nöbetçi'yi ilk kez gerçek bir işin başına koydum: [ytfactory](https://github.com/emirhnnnk-lab/ytfactory) video ajanının senaryo ve sahne adımı (`ornek/ytfactory_senaryo.json`).
@@ -116,7 +153,13 @@ Destek ajanının tekrarlanabilirlik ölçümünü Nöbetçi'nin gözetiminde ba
 
 Düzeltme: daha belirgin bir sebep bulunduysa genel hata satırı artık sebep sayılmıyor (test 17). Ölçümü düzeltilmiş Nöbetçi ve gerçek çarelerle yeniden başlattım.
 
+## Neden tek komut ekledim (11.11)
+
+08.11'den sonra Nöbetçi'yi üç gün hiç kullanmadım. Sebebi basitti: her iş için elle bir ayar dosyası yazmak gerekiyordu ve acelem olduğunda bunu atlıyordum. Kullanılmayan bekçi bekçi değildir. O yüzden ayar dosyasını zorunlu olmaktan çıkardım; artık komutun başına `python nobetci.py calistir --` yazmak yetiyor.
+
 ## Sınırlar
+
+- `ornek/demo_kontrol.py` yalnız adresin cevap verip vermediğine bakıyor. Uyuyan bir Hugging Face demosu da "200" dönebiliyor; demonun gerçekten soru cevapladığını bu betik ölçmüyor.
 
 - Kaldığı yerden devam etmeyi Nöbetçi yapamıyor; bunu izlenen işin kendisi bilmeli. Nöbetçi yeniden başlatırken `devam_bayragi` ile `--devam` gibi bir argüman ekleyebiliyor.
 - Tanıdığı hatalar benim karşılaştığım arızalarla sınırlı. Yeni bir arıza tipi `IMZALAR` listesine ekleniyor, her yeni imza bir test istiyor.

@@ -7,7 +7,8 @@ geri alınabilir durumlarda kendi başına toparlayan küçük bir ajan sistemi.
   şef     → kurala göre karar verir: yeniden başlat (geri alınabilirse, hak varsa) ya da insana sor
 
 Kullanım:
-  python nobetci.py izle gorevler.json        # görevleri başlatır ve izler
+  python nobetci.py calistir --cikti sonuc.json -- python deney.py   # tek komut, ayar dosyası yok
+  python nobetci.py izle gorevler.json        # birden fazla görevi ayar dosyasından başlatır ve izler
   python nobetci.py durum  durum/             # nöbetçinin kendisi yaşıyor mu (dışarıdan nabız kontrolü)
 Bağımlılık yok (stdlib). Ollama varsa teşhis özetini yerel LLM yazar; yoksa kural tabanlı teşhis yeter.
 """
@@ -352,8 +353,98 @@ def yukle(dosya: str) -> list[Gorev]:
     return [Gorev(**d) for d in json.loads(Path(dosya).read_text(encoding="utf-8"))["gorevler"]]
 
 
+# ---------------------------------------------------------------- tek komut (ayar dosyası yazmadan)
+_YORUMLAYICI = {"python", "python3", "py", "pythonw", "node", "npx", "npm", "bash", "sh", "powershell", "pwsh", "cmd", "uv"}
+
+
+def ad_uret(komut: list[str]) -> str:
+    """Komuttan okunur bir görev adı: 'python src/egit.py --x' → 'egit', 'ffmpeg -i a.mp4' → 'ffmpeg'."""
+    ad = Path(komut[0]).stem
+    if ad.lower() in _YORUMLAYICI:
+        for parca in komut[1:]:
+            if not parca.startswith("-") and re.search(r"\w", Path(parca).stem):
+                ad = Path(parca).stem
+                break
+    return re.sub(r"[^\w-]+", "-", ad).strip("-")[:40] or "is"
+
+
+CALISTIR_KULLANIM = """Kullanım: python nobetci.py calistir [seçenekler] -- <komut ...>
+  --cikti DOSYA        iş ancak bu dosya oluşunca "bitti" sayılır (önerilir; yoksa yalnız çıkış koduna bakılır)
+  --ad AD              görev adı (verilmezse komuttan türetilir)
+  --sessizlik SN       bu kadar saniye hiçbir şey değişmezse "askıda" (varsayılan 600)
+  --geri-alinabilir    geçici hatada sormadan yeniden başlatabilir
+  --hak N              yeniden başlatma hakkı (varsayılan 2)
+  --devam "ARGÜMAN"    yeniden başlatırken komuta eklenecek argüman (ör. "--devam")
+  --klasor KLASOR      defter ve logların yazılacağı yer (varsayılan .nobetci)
+  --aralik SN          kontrol aralığı (varsayılan 2)
+  --llm MODEL          teşhis özetini yerel modelle yaz (Ollama)
+Örnek: python nobetci.py calistir --cikti sonuc.json -- python deney.py --tur 5"""
+
+
+def calistir(argv: list[str]) -> int:
+    """Tek bir komutu nöbet altında çalıştırır. Dönüş: 0 = bitti, 1 = bitmedi (rapor yazıldı), 2 = kullanım hatası."""
+    import argparse
+    if "--" not in argv or not argv[argv.index("--") + 1:]:
+        print(CALISTIR_KULLANIM)
+        return 2
+    i = argv.index("--")
+    komut = list(argv[i + 1:])
+    ap = argparse.ArgumentParser(prog="nobetci.py calistir", add_help=False)
+    ap.add_argument("--cikti")
+    ap.add_argument("--ad")
+    ap.add_argument("--sessizlik", type=int, default=600)
+    ap.add_argument("--geri-alinabilir", action="store_true")
+    ap.add_argument("--hak", type=int, default=2)
+    ap.add_argument("--devam", default="")
+    ap.add_argument("--klasor", default=".nobetci")
+    ap.add_argument("--aralik", type=float, default=2)
+    ap.add_argument("--llm")
+    a = ap.parse_args(argv[:i])
+
+    # Windows'ta 'npm' gibi komutlar aslında npm.cmd'dir; tam yolu bulamazsak hiç başlatmadan söyle.
+    yol = shutil.which(komut[0])
+    if not yol and not Path(komut[0]).exists():
+        print(f"Komut bulunamadı: {komut[0]} (yazım hatası olabilir ya da PATH'te değil). Hiçbir şey başlatılmadı.")
+        return 2
+    komut[0] = yol or komut[0]
+
+    ad = a.ad or ad_uret(argv[i + 1:])
+    klasor = Path(a.klasor)
+    log = klasor / "loglar" / f"{ad}-{time.strftime('%Y%m%d-%H%M%S')}.log"   # her çalıştırmaya ayrı log: eski hata yeni teşhise karışmaz
+    g = Gorev(ad=ad, komut=komut, log=str(log), cikti=a.cikti, sessizlik_sn=a.sessizlik,
+              geri_alinabilir=a.geri_alinabilir, yeniden_hak=a.hak, devam_bayragi=a.devam.split())
+    t0 = time.time()
+    durum = izle([g], Defter(str(klasor)), a.aralik, a.llm)[ad]
+
+    print(f"\nNöbetçi: {ad} → {durum} ({int(time.time() - t0)} sn)")
+    print(f"  log:   {log}")
+    if a.cikti:
+        print(f"  çıktı: {a.cikti}" + ("" if durum == BITTI else "  (YOK)"))
+    else:
+        print("  not:   --cikti verilmedi; yalnız çıkış koduna bakıldı ('yeşil ama ölü' yakalanamaz)")
+    if durum != BITTI:
+        son = [json.loads(s) for s in (klasor / "olaylar.jsonl").read_text(encoding="utf-8").splitlines()][-1]
+        print(f"  karar: {son.get('karar')} — {son.get('gerekce')}")
+        for b in son.get("teshis", {}).get("bulgular", []):
+            print(f"  sebep: {b['sebep']}\n  kanıt: {b['kanit']}")
+        print(f"  rapor: {klasor / 'INSANA_SOR.md'}")
+    return 0 if durum == BITTI else 1
+
+
+def konsol_utf8():
+    """Windows'ta çıktı bir dosyaya/boruya yönlenince Türkçe harf ve ok işareti programı çökertmesin."""
+    for akis in (sys.stdout, sys.stderr):
+        try:
+            akis.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
-    if len(sys.argv) >= 3 and sys.argv[1] == "izle":
+    konsol_utf8()
+    if len(sys.argv) >= 2 and sys.argv[1] == "calistir":
+        sys.exit(calistir(sys.argv[2:]))
+    elif len(sys.argv) >= 3 and sys.argv[1] == "izle":
         ayar = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
         sonuc = izle(yukle(sys.argv[2]), Defter(ayar.get("defter", "durum")), ayar.get("aralik_sn", 15), ayar.get("llm"))
         print(json.dumps(sonuc, ensure_ascii=False))
