@@ -10,10 +10,14 @@ Kullanım:
   python nobetci.py calistir --cikti sonuc.json -- python deney.py   # tek komut, ayar dosyası yok
   python nobetci.py izle gorevler.json        # birden fazla görevi ayar dosyasından başlatır ve izler
   python nobetci.py durum  durum/             # nöbetçinin kendisi yaşıyor mu (dışarıdan nabız kontrolü)
+  python nobetci.py nabiz  .nobetci           # aynı kontrol + alarmda Telegram (Görev Zamanlayıcı her N dakikada çağırır)
+  python nobetci.py zamanla .nobetci          # Görev Zamanlayıcı komutlarını yalnız EKRANA yazar, kayıt yapmaz
+  python nobetci.py panel  .nobetci           # son işleri tek dosyalık HTML panele döker
 Bağımlılık yok (stdlib). Ollama varsa teşhis özetini yerel LLM yazar; yoksa kural tabanlı teşhis yeter.
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -23,6 +27,7 @@ import sys
 import time
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------- durumlar
@@ -366,17 +371,147 @@ class Defter:
         (self.k / "nabiz").write_text(str(time.time()))
 
 
-def nabiz_kontrol(klasor: str, esik_sn: int = 180) -> int:
-    """Nöbetçiyi nöbetçiden bağımsız kontrol eder (zamanlanmış görev / başka makine çağırır)."""
+def nabiz_bak(klasor: str, esik_sn: int = 180) -> tuple[int, str]:
+    """Nabız dosyasına bakar. Dönüş: (0 tamam / 1 nabız eski / 2 nabız dosyası yok, açıklama).
+    Nabız eski ama defterdeki her iş kapanmışsa alarm yok: nöbetçi ölmedi, nöbeti bitti (kayıt sustu ≠ ölüm)."""
     p = Path(klasor) / "nabiz"
     if not p.exists():
-        print("ALARM: nabız dosyası yok — nöbetçi hiç çalışmamış ya da yanlış klasör")
-        return 2
-    yas = time.time() - float(p.read_text())
+        return 2, "ALARM: nabız dosyası yok — nöbetçi hiç çalışmamış ya da yanlış klasör"
+    try:
+        yas = time.time() - float(p.read_text())
+    except ValueError:
+        return 2, "ALARM: nabız dosyası okunamadı — nöbetçi yazarken kesilmiş olabilir"
     if yas > esik_sn:
-        print(f"ALARM: nöbetçi {int(yas)} sn'dir nabız atmıyor — nöbetçinin kendisi ölü")
-        return 1
-    print(f"tamam: son nabız {int(yas)} sn önce")
+        isler = isleri_cikar(olaylari_oku(Path(klasor) / "olaylar.jsonl")[0])
+        if isler and all(i["bitis"] for i in isler):
+            return 0, f"tamam: nöbet bitti, açık iş yok (son nabız {int(yas)} sn önce)"
+        return 1, f"ALARM: nöbetçi {int(yas)} sn'dir nabız atmıyor — nöbetçinin kendisi ölü"
+    return 0, f"tamam: son nabız {int(yas)} sn önce"
+
+
+def nabiz_kontrol(klasor: str, esik_sn: int = 180) -> int:
+    """Nöbetçiyi nöbetçiden bağımsız kontrol eder (zamanlanmış görev / başka makine çağırır)."""
+    kod, mesaj = nabiz_bak(klasor, esik_sn)
+    print(mesaj)
+    return kod
+
+
+# ---------------------------------------------------------------- zamanlanmış nabız (alarmda Telegram)
+NABIZ_TEKRAR_SN = 6 * 3600   # aynı alarm en erken bu kadar sonra yeniden hatırlatılır
+
+
+def nabiz_tur(klasor: str, esik_sn: int = 180, tekrar_sn: int = NABIZ_TEKRAR_SN) -> int:
+    """Tek tur nabız kontrolü. Alarm varsa Telegram'a haber verir, yoksa sessiz kalır.
+    Aynı alarm her turda yeniden gitmez: son bildirilen durum klasördeki nabiz_bildirim.json'da durur;
+    yalnız durum değişince (ya da tekrar_sn geçince) yeniden haber gider. Alarm düzelince tek bir 'düzeldi' gider.
+    Gönderilemeyen haber kaydedilmez, yani bir sonraki turda yeniden denenir. Dönüş: nabiz_bak'ın kodu."""
+    kod, mesaj = nabiz_bak(klasor, esik_sn)
+    print(mesaj, flush=True)
+    kayit = Path(klasor) / "nabiz_bildirim.json"
+    try:
+        son = json.loads(kayit.read_text(encoding="utf-8"))
+    except Exception:
+        son = {}
+    simdi = time.time()
+    ad = Path(klasor).resolve().name or str(klasor)
+    if kod:
+        if son.get("kod") == kod and simdi - float(son.get("zaman", 0)) < tekrar_sn:
+            print("  haber: aynı alarm zaten bildirildi; tekrar gönderilmedi")
+            return kod
+        metin = f"🚨 Nöbetçi nabız alarmı ({ad})\n{mesaj}"
+        if son.get("kod") == kod:
+            metin += f"\n(hatırlatma: alarm {son.get('ilk', '?')} tarihinden beri sürüyor)"
+    elif son.get("kod"):
+        metin = f"✅ Nöbetçi nabzı düzeldi ({ad})\n{mesaj}"
+    else:
+        return 0                                       # alarm yok, bildirilmiş alarm da yok: sessiz
+    if bildir(metin):
+        ilk = son.get("ilk") if son.get("kod") == kod else time.strftime("%Y-%m-%d %H:%M:%S")
+        kayit.parent.mkdir(parents=True, exist_ok=True)
+        kayit.write_text(json.dumps({"kod": kod, "zaman": simdi, "ilk": ilk}, ensure_ascii=False), encoding="utf-8")
+        print("  haber: Telegram'a gönderildi")
+    elif bildirim_ayari() is None:
+        print("  haber: Telegram ayarı yok, bildirim gönderilmedi (kurmak için: python nobetci.py telegram-kur)")
+    else:
+        print("  haber: Telegram'a gönderilemedi; bir sonraki turda yeniden denenecek")
+    return kod
+
+
+NABIZ_KULLANIM = """Kullanım: python nobetci.py nabiz <klasör> [seçenekler]
+  --esik SN        nabız bu kadar saniyeden eskiyse alarm (varsayılan 180)
+  --tekrar SN      aynı alarmı en erken bu kadar saniye sonra yeniden hatırlat (varsayılan 21600 = 6 saat)
+  --aralik SN      verilirse kendi içinde döner, her SN saniyede bir bakar (verilmezse tek tur: Görev Zamanlayıcı için)
+  --tur N          --aralik ile en fazla N tur (deneme için; verilmezse Ctrl+C'ye kadar)
+Çıkış kodu: 0 = tamam, 1 = nabız eski, 2 = nabız dosyası yok, 3 = kullanım hatası.
+Örnek: python nobetci.py nabiz .nobetci --aralik 300"""
+
+
+def nabiz(argv: list[str]) -> int:
+    import argparse
+    if not argv or argv[0].startswith("-"):
+        print(NABIZ_KULLANIM)
+        return 3
+    ap = argparse.ArgumentParser(prog="nobetci.py nabiz", add_help=False)
+    ap.add_argument("klasor")
+    ap.add_argument("--esik", type=int, default=180)
+    ap.add_argument("--tekrar", type=int, default=NABIZ_TEKRAR_SN)
+    ap.add_argument("--aralik", type=float, default=0)
+    ap.add_argument("--tur", type=int, default=0)
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        print(NABIZ_KULLANIM)
+        return 3
+    kod, n = 0, 0
+    try:
+        while True:
+            kod = nabiz_tur(a.klasor, a.esik, a.tekrar)
+            n += 1
+            if not a.aralik or (a.tur and n >= a.tur):
+                return kod
+            time.sleep(a.aralik)
+    except KeyboardInterrupt:
+        print("Nabız takibi durduruldu.")
+        return kod
+
+
+def zamanla(argv: list[str]) -> int:
+    """Görev Zamanlayıcı kaydı için komutları yalnız EKRANA YAZAR. Hiçbir şeyi çalıştırmaz, sisteme dokunmaz;
+    kaydı kullanıcı kendi onayıyla yapar."""
+    import argparse
+    ap = argparse.ArgumentParser(prog="nobetci.py zamanla", add_help=False)
+    ap.add_argument("klasor", nargs="?", default=".nobetci")
+    ap.add_argument("--dakika", type=int, default=10)
+    ap.add_argument("--esik", type=int, default=180)
+    ap.add_argument("--ad")
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        print("Kullanım: python nobetci.py zamanla [klasör] [--dakika N] [--esik SN] [--ad GÖREV_ADI]")
+        return 3
+    klasor = Path(a.klasor).resolve()
+    betik = Path(__file__).resolve()
+    py = Path(sys.executable)
+    if os.name == "nt" and py.with_name("pythonw.exe").exists():
+        py = py.with_name("pythonw.exe")               # her turda siyah pencere açılıp kapanmasın
+    ad = a.ad or "Nobetci-nabiz-" + (re.sub(r"[^\w-]+", "-", klasor.name).strip("-") or "klasor")
+    esik = f" --esik {a.esik}" if a.esik != 180 else ""
+    tr = f'\\"{py}\\" \\"{betik}\\" nabiz \\"{klasor}\\"{esik}'
+    kur = f'/Create /SC MINUTE /MO {a.dakika} /TN "{ad}" /TR "{tr}"'
+    print("Görev Zamanlayıcı kaydı — HİÇBİR ŞEY KAYDEDİLMEDİ. Kurmak istersen aşağıdaki satırı kendin çalıştır.\n")
+    print("Kurmak (cmd):")
+    print(f"  schtasks {kur}")
+    print("Kurmak (PowerShell; --% satırın geri kalanını olduğu gibi geçirir):")
+    print(f"  schtasks --% {kur}")
+    print(f'Hemen bir kez denemek:  schtasks /Run /TN "{ad}"')
+    print(f'Kurulu mu bakmak:       schtasks /Query /TN "{ad}"')
+    print(f'Kaldırmak:              schtasks /Delete /TN "{ad}" /F')
+    if len(tr.replace('\\"', '"')) > 261:
+        print("\nUyarı: /TR metni 261 karakteri aşıyor; schtasks kabul etmeyebilir. Projeyi daha kısa bir yola taşı.")
+    print(f"\nNot: görev her {a.dakika} dakikada senin kullanıcınla, oturum açıkken çalışır; Telegram ayarını "
+          f"{bildirim_dosyasi()} dosyasından okur. Alarm yoksa sessizdir.")
+    if os.name != "nt":
+        print(f"\nLinux/macOS (crontab -e):\n  */{a.dakika} * * * * {sys.executable} {betik} nabiz {klasor}{esik}")
     return 0
 
 
@@ -515,6 +650,227 @@ def calistir(argv: list[str]) -> int:
     return 0 if durum == BITTI else 1
 
 
+# ---------------------------------------------------------------- panel (tek dosyalık statik HTML)
+# Panele yalnız defterdeki karar bilgisi girer: kanıt satırı (log içeriği) girmez, komuttaki yollar dosya adına
+# kısalır, token/şifre gibi argümanlar maskelenir. Telegram ayarı hiç okunmaz.
+DURUM_ETIKET = {BITTI: "Bitti", YESIL_AMA_OLU: "Yeşil ama ölü", OLDU: "Öldü", ASKIDA: "Askıda", "YARIM": "Kayıt yarım"}
+KARAR_ETIKET = {"kapat": "kapatıldı", "insana_sor": "insana soruldu", "yeniden_baslat": "yeniden başlatıldı"}
+_GIZLI = re.compile(r"(?i)token|key|secret|passw|sifre|şifre|parola")
+_ZAMAN = "%Y-%m-%d %H:%M:%S"
+
+
+def olaylari_oku(dosya: Path) -> tuple[list[dict], int]:
+    """olaylar.jsonl'ı okur. Bozuk/yarım satır paneli çökertmez: atlanır ve sayılır. Dönüş: (olaylar, bozuk)."""
+    if not Path(dosya).exists():
+        return [], 0
+    olaylar, bozuk = [], 0
+    for s in Path(dosya).read_text(encoding="utf-8", errors="replace").splitlines():
+        if not s.strip():
+            continue
+        try:
+            o = json.loads(s)
+        except ValueError:
+            bozuk += 1
+            continue
+        if isinstance(o, dict) and o.get("gorev"):
+            olaylar.append(o)
+        else:
+            bozuk += 1
+    return olaylar, bozuk
+
+
+def _ilk_sebep(o: dict) -> str:
+    t = o.get("teshis")
+    bulgular = t.get("bulgular") if isinstance(t, dict) else None
+    for b in bulgular if isinstance(bulgular, list) else []:
+        if isinstance(b, dict) and b.get("sebep"):
+            return str(b["sebep"])
+    return ""
+
+
+def isleri_cikar(olaylar: list[dict]) -> list[dict]:
+    """Olayları işlere çevirir: BASLADI bir iş açar, 'yeniden_baslat' dışındaki ilk karar onu kapatır.
+    Kapanmamış iş 'YARIM' kalır (hâlâ sürüyor ya da nöbetçi yarıda kesilmiş)."""
+    isler: list[dict] = []
+    acik: dict[str, dict] = {}
+    for o in olaylar:
+        ad = str(o.get("gorev"))
+        if o.get("durum") == "BASLADI":
+            acik[ad] = {"gorev": ad, "baslangic": o.get("zaman"), "bitis": None, "komut": o.get("komut"),
+                        "durum": "YARIM", "karar": "", "yeniden": 0, "sebep": "", "bildirim": ""}
+            isler.append(acik[ad])
+            continue
+        is_ = acik.get(ad)
+        if is_ is None:                                  # başlangıcı defterde olmayan karar (eski kayıt)
+            is_ = acik[ad] = {"gorev": ad, "baslangic": None, "bitis": None, "komut": None,
+                              "durum": "YARIM", "karar": "", "yeniden": 0, "sebep": "", "bildirim": ""}
+            isler.append(is_)
+        if o.get("karar") == "yeniden_baslat":
+            is_["yeniden"] += 1
+            continue
+        is_.update(durum=str(o.get("durum") or "?"), karar=str(o.get("karar") or ""), bitis=o.get("zaman") or "?",
+                   sebep=_ilk_sebep(o), bildirim=str(o.get("bildirim") or ""))
+        del acik[ad]
+    return isler
+
+
+def sure_metni(bas, bit) -> str:
+    try:
+        sn = int((datetime.strptime(str(bit), _ZAMAN) - datetime.strptime(str(bas), _ZAMAN)).total_seconds())
+    except (TypeError, ValueError):
+        return "—"
+    if sn < 0:
+        return "—"
+    if sn < 60:
+        return f"{sn} sn"
+    if sn < 3600:
+        return f"{sn // 60} dk {sn % 60} sn"
+    return f"{sn // 3600} sa {sn % 3600 // 60} dk"
+
+
+def kisa_komut(komut) -> str:
+    """Komutu panele uygun hale getirir: yollar dosya adına iner (kişisel klasör adı sızmaz), gizli argüman maskelenir."""
+    parcalar = komut if isinstance(komut, list) else str(komut or "").split()
+    cikti, gizle = [], False
+    for i, p in enumerate(map(str, parcalar)):
+        if gizle:
+            cikti.append("•••")
+            gizle = False
+            continue
+        if p.startswith("-") and _GIZLI.search(p):
+            if "=" in p:
+                cikti.append(p.split("=", 1)[0] + "=•••")
+            else:
+                cikti.append(p)
+                gizle = True
+            continue
+        if re.search(r"[\\/]", p) and " " not in p:
+            p = re.split(r"[\\/]", p.rstrip("\\/"))[-1] or p
+        if i == 0:
+            p = re.sub(r"(?i)\.exe$", "", p)
+        cikti.append(f'"{p}"' if " " in p else p)
+    s = " ".join(cikti)
+    return s if len(s) <= 160 else s[:159] + "…"
+
+
+PANEL_CSS = """
+:root{color-scheme:light dark;--zemin:#f5f6f8;--kart:#fff;--yazi:#1b1f24;--soluk:#5d6672;--cizgi:#e2e5e9;
+--yesil:#1d7a3e;--yesil-z:#e2f3e7;--kirmizi:#b42318;--kirmizi-z:#fde7e4;--sari:#8a5a00;--sari-z:#fff1d1;
+--mor:#6a3fc8;--mor-z:#eee8fd;--gri:#59626d;--gri-z:#eceef1}
+@media (prefers-color-scheme:dark){:root{--zemin:#0f1216;--kart:#171b21;--yazi:#e6e9ee;--soluk:#9ba4af;--cizgi:#272d35;
+--yesil:#62d38c;--yesil-z:#11301e;--kirmizi:#ff8b7c;--kirmizi-z:#3b1714;--sari:#f1c14f;--sari-z:#33270b;
+--mor:#bba5ff;--mor-z:#251c3e;--gri:#a4adb8;--gri-z:#232830}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--zemin);color:var(--yazi);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:960px;margin:0 auto;padding:28px 16px 40px}
+h1{font-size:22px;margin:0 0 2px;letter-spacing:-.01em}
+.alt{color:var(--soluk);font-size:13px;margin:0}
+.ozet{display:flex;flex-wrap:wrap;gap:8px;margin:18px 0 20px}
+.sayi{background:var(--kart);border:1px solid var(--cizgi);border-radius:10px;padding:8px 14px;min-width:104px}
+.sayi b{display:block;font-size:20px;font-variant-numeric:tabular-nums}
+.sayi span{color:var(--soluk);font-size:12px}
+ol{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+li{background:var(--kart);border:1px solid var(--cizgi);border-left:4px solid var(--renk);border-radius:10px;
+padding:12px 14px;display:grid;grid-template-columns:auto 1fr auto;gap:4px 14px;align-items:baseline}
+.rozet{background:var(--rz);color:var(--renk);font-weight:600;font-size:12.5px;padding:2px 10px;border-radius:999px;white-space:nowrap;justify-self:start}
+.ad{font-weight:600;overflow-wrap:anywhere}
+.zaman{color:var(--soluk);font-size:13px;white-space:nowrap;text-align:right;font-variant-numeric:tabular-nums}
+.komut,.detay{grid-column:2/4;overflow-wrap:anywhere}
+.komut{font:12.5px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--soluk)}
+.detay{font-size:13.5px}
+.detay em{font-style:normal;color:var(--soluk)}
+.k-BITTI{--renk:var(--yesil);--rz:var(--yesil-z)}
+.k-OLDU{--renk:var(--kirmizi);--rz:var(--kirmizi-z)}
+.k-YESIL_AMA_OLU{--renk:var(--sari);--rz:var(--sari-z)}
+.k-ASKIDA{--renk:var(--mor);--rz:var(--mor-z)}
+.k-diger{--renk:var(--gri);--rz:var(--gri-z)}
+.bos{background:var(--kart);border:1px dashed var(--cizgi);border-radius:10px;padding:28px 18px;text-align:center}
+.bos code{font-size:13px;overflow-wrap:anywhere}
+footer{margin-top:22px;color:var(--soluk);font-size:12.5px}
+@media (max-width:560px){li{grid-template-columns:1fr}.komut,.detay{grid-column:auto}.zaman{text-align:left;white-space:normal}}
+"""
+
+
+def panel_html(isler: list[dict], bozuk: int = 0, kaynaklar: list[str] | None = None, son: int = 20,
+               dosya_yok: bool = False) -> str:
+    e = lambda x: html.escape(str(x), quote=True)  # noqa: E731 — panele giren her metin buradan geçer
+    gosterilen = list(reversed(isler))[:son]
+    sayilar = [(len(isler), "iş"), (sum(i["durum"] == BITTI for i in isler), "bitti"),
+               (sum(i["karar"] == "insana_sor" for i in isler), "insana soruldu"),
+               (sum(i["yeniden"] for i in isler), "yeniden başlatma")]
+    govde = []
+    if not isler:
+        neden = "Defter dosyası (olaylar.jsonl) bulunamadı." if dosya_yok else "Defterde henüz kayıtlı iş yok."
+        govde.append(f'<div class="bos"><p><b>{e(neden)}</b></p><p class="alt">Bir işi nöbet altında başlatınca burada görünür:</p>'
+                     f'<p><code>python nobetci.py calistir --cikti sonuc.json -- &lt;komut&gt;</code></p></div>')
+    else:
+        govde.append('<div class="ozet">' + "".join(f'<div class="sayi"><b>{e(n)}</b><span>{e(t)}</span></div>'
+                                                    for n, t in sayilar) + "</div>")
+        govde.append("<ol>")
+        for i in gosterilen:
+            sinif = i["durum"] if i["durum"] in (BITTI, OLDU, YESIL_AMA_OLU, ASKIDA) else "diger"
+            detay = [KARAR_ETIKET.get(i["karar"], i["karar"]) or "karar yok"]
+            if i["yeniden"]:
+                detay.append(f"{i['yeniden']}× yeniden başlatıldı")
+            if i["bildirim"]:
+                detay.append(f"Telegram: {i['bildirim']}")
+            satir = " · ".join(e(x) for x in detay)
+            if i["sebep"]:
+                satir += f' <em>— {e(i["sebep"])}</em>'
+            komut = kisa_komut(i["komut"])
+            govde.append(
+                f'<li class="k-{e(sinif)}"><span class="rozet">{e(DURUM_ETIKET.get(i["durum"], i["durum"]))}</span>'
+                f'<span class="ad">{e(i["gorev"])}</span>'
+                f'<span class="zaman">{e(i["baslangic"] or i["bitis"] or "—")} · {e(sure_metni(i["baslangic"], i["bitis"]))}</span>'
+                + (f'<span class="komut">{e(komut)}</span>' if komut else "")
+                + f'<span class="detay">{satir}</span></li>')
+        govde.append("</ol>")
+    alt = [f"Son {min(son, len(isler))} / {len(isler)} iş" if isler else "Kayıt yok"]
+    if kaynaklar:
+        alt.append("defter: " + ", ".join(kaynaklar))
+    if bozuk:
+        alt.append(f"{bozuk} bozuk satır atlandı")
+    alt.append("üretildi: " + time.strftime(_ZAMAN))
+    return ("<!doctype html>\n<html lang=\"tr\"><head><meta charset=\"utf-8\">"
+            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            f"<title>Nöbetçi paneli</title><style>{PANEL_CSS}</style></head><body><main>"
+            "<h1>Nöbetçi paneli</h1><p class=\"alt\">Uzun süren işler: hangisi bitti, hangisi sessizce öldü, hangisi insana soruldu.</p>"
+            + "".join(govde) + f"<footer>{' · '.join(e(x) for x in alt)}</footer></main></body></html>\n")
+
+
+def panel_uret(klasorler: list[str], cikti: str | Path, son: int = 20) -> tuple[Path, int, int]:
+    """Bir ya da birkaç defter klasöründen panel üretir. Dönüş: (dosya, iş sayısı, bozuk satır)."""
+    isler, bozuk, dosya_var = [], 0, False
+    for k in klasorler:
+        d = Path(k) / "olaylar.jsonl"
+        dosya_var = dosya_var or d.exists()
+        o, b = olaylari_oku(d)
+        isler += isleri_cikar(o)
+        bozuk += b
+    isler.sort(key=lambda i: str(i["baslangic"] or i["bitis"] or ""))   # birkaç defter: zamana göre tek akış
+    kaynaklar = [Path(k).resolve().name for k in klasorler]               # tam yol değil: kişisel klasör adı sızmaz
+    p = Path(cikti)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(panel_html(isler, bozuk, kaynaklar, son, dosya_yok=not dosya_var), encoding="utf-8")
+    return p, len(isler), bozuk
+
+
+def panel(argv: list[str]) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(prog="nobetci.py panel", add_help=False)
+    ap.add_argument("klasorler", nargs="*", default=[".nobetci"])
+    ap.add_argument("--cikti")
+    ap.add_argument("--son", type=int, default=20)
+    try:
+        a = ap.parse_args(argv)
+    except SystemExit:
+        print("Kullanım: python nobetci.py panel [klasör ...] [--cikti panel.html] [--son N]")
+        return 3
+    p, n, bozuk = panel_uret(a.klasorler, a.cikti or Path(a.klasorler[0]) / "panel.html", max(1, a.son))
+    print(f"Panel yazıldı: {p}  ({n} iş" + (f", {bozuk} bozuk satır atlandı" if bozuk else "") + ")")
+    return 0
+
+
 def konsol_utf8():
     """Windows'ta çıktı bir dosyaya/boruya yönlenince Türkçe harf ve ok işareti programı çökertmesin."""
     for akis in (sys.stdout, sys.stderr):
@@ -536,5 +892,11 @@ if __name__ == "__main__":
         print(json.dumps(sonuc, ensure_ascii=False))
     elif len(sys.argv) >= 3 and sys.argv[1] == "durum":
         sys.exit(nabiz_kontrol(sys.argv[2]))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "nabiz":
+        sys.exit(nabiz(sys.argv[2:]))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "zamanla":
+        sys.exit(zamanla(sys.argv[2:]))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "panel":
+        sys.exit(panel(sys.argv[2:]))
     else:
         print(__doc__)

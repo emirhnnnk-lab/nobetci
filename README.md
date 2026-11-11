@@ -1,6 +1,6 @@
 # Nöbetçi: sessizce ölen işleri yakalayan bekçi
 
-> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. One command wraps any job, no config file: `python nobetci.py calistir --cikti result.json -- <your command>`. 25 tests, 17 of them failure scenarios; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents. Full English version: [README.en.md](README.en.md).
+> **EN summary:** A small, dependency-free agent system that watches long-running jobs *from the outside*. It catches "silent death" (jobs that are green but dead, or alive but stuck), diagnoses the cause from logs with evidence-backed claims, and auto-recovers only when the job is reversible and the cause is transient. Everything else is escalated to a human. Built after my own ML experiments died silently on a 4 GB GPU machine. One command wraps any job, no config file: `python nobetci.py calistir --cikti result.json -- <your command>`. A scheduled heartbeat check pings Telegram once per alarm, and a single-file HTML dashboard shows recent jobs. 38 tests, 17 of them failure scenarios; known failures are auto-remediated with pre-approved, reversible, verified actions and only reported, all reproduced from real incidents. Full English version: [README.en.md](README.en.md).
 
 Akşam uzun bir deney başlatıyorum, sabah kalkıp bakıyorum: ya bitmiş, ya da gece yarısı bir yerde ölmüş ve kimse bana haber vermemiş. Ekrana bir hata düşmüş ama okuyan olmamış. Ya da program "bitti" deyip kapanmış ama yazması gereken dosya ortada yok.
 
@@ -96,12 +96,45 @@ python nobetci.py telegram-kur    # sohbet numarasını bulur, dosyaya yazar, de
 
 Token depoda durmuyor, kullanıcı klasöründe duruyor. Ayar yoksa bildirim sessizce kapalı kalıyor; Telegram'a ulaşılamazsa izleme durmuyor, deftere "gitmedi" yazılıyor. Mesajda kayıttan bir satır gittiği için, kayda şifre basan bir işte bunu açmam.
 
+### Zamanlanmış nabız kontrolü
+
+`durum` komutu Nöbetçi'nin kendisinin yaşayıp yaşamadığını söylüyor, ama ben bakarsam. Nöbetçi gece ölürse bunu da sabah öğreniyorum. `nabiz` aynı kontrolü yapıp alarm varsa Telegram'a yazıyor, yoksa sessiz kalıyor:
+
+```bash
+python nobetci.py nabiz .nobetci                  # tek tur (Görev Zamanlayıcı her N dakikada bunu çağırır)
+python nobetci.py nabiz .nobetci --aralik 300     # ya da kendi içinde döner, 5 dakikada bir bakar
+```
+
+- **Aynı alarm her turda gelmiyor.** Son bildirilen durum klasördeki `nabiz_bildirim.json` dosyasında duruyor. Durum değişmedikçe yeni mesaj yok; alarm sürüyorsa 6 saatte bir hatırlatıyor (`--tekrar SN`). Alarm düzelince tek bir "düzeldi" mesajı geliyor.
+- Gönderilemeyen mesaj kaydedilmiyor, yani bir sonraki turda yeniden deneniyor. Telegram ayarı yoksa çökmüyor, bunu söyleyip alarm kodunu yine veriyor.
+- Çıkış kodu: 0 tamam, 1 nabız eski, 2 nabız dosyası yok.
+- Nabız eski ama defterdeki her iş kapanmışsa alarm yok: Nöbetçi ölmemiş, nöbeti bitmiş. 21:36 dersinin aynısı, bu sefer bekçinin kendisi için.
+
+Görev Zamanlayıcı'ya kaydı Nöbetçi kendisi yapmıyor; yalnız hazır komutu ekrana yazıyor:
+
+```bash
+python nobetci.py zamanla .nobetci --dakika 10    # kurma, deneme, bakma ve kaldırma komutlarını yazar
+```
+
+Çıkan `schtasks /Create ...` satırını kendim çalıştırınca görev her 10 dakikada bir, oturumum açıkken çalışıyor (`pythonw` ile, pencere açılmadan). Kaldırmak için yine çıktıdaki satır yetiyor: `schtasks /Delete /TN "Nobetci-nabiz-..." /F`.
+
+### Panel
+
+Defterdeki son işleri tek dosyalık bir HTML sayfasına döküyor: zaman, iş adı, komut, karar, süre, yeniden başlatma sayısı ve sebep. Dış kaynak yok (CDN, font, script yok), açık ve koyu temada okunuyor, telefonda taşmıyor.
+
+```bash
+python nobetci.py panel .nobetci                          # .nobetci/panel.html
+python nobetci.py panel ornek/durum ornek/durum_demo --cikti panel.html --son 50
+```
+
+Panele yalnız karar bilgisi giriyor. Kayıttan kanıt satırı girmiyor, komuttaki yollar dosya adına kısalıyor, `--token` gibi argümanlar maskeleniyor, Telegram ayarı hiç okunmuyor. Olaylardaki her metin HTML'e kaçışlanarak giriyor; bozuk ya da yarım yazılmış satır paneli çökertmiyor, atlanıp sayılıyor.
+
 Birden fazla işi birlikte izlemek için ayar dosyası hâlâ duruyor:
 
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # görevleri başlat ve izle
 python nobetci.py durum ornek/durum                    # nöbetçi yaşıyor mu? (0 = tamam, 1 = alarm)
-python tests/test_nobetci.py                           # 25 test
+python tests/test_nobetci.py                           # 38 test
 ```
 
 Görev tanımı (`ornek/ytfactory_senaryo.json`):
@@ -153,6 +186,25 @@ Haber verme için:
 23. Bana sorulan işte mesaj gider; içinde iş adı, sebep ve kanıt satırı vardır
 24. Biten iş için mesaj gitmez
 25. Ayar yoksa bildirim kapalıdır; Telegram'a ulaşılamazsa izleme çökmez
+
+Zamanlanmış nabız için:
+
+26. Nabız eski → alarm kodu döner, tek mesaj gider
+27. Nabız taze → mesaj gitmez
+28. Aynı alarm ikinci turda tekrar gitmez; hatırlatma süresi dolunca ya da alarm türü değişince gider
+29. Alarm düzelince tek bir "düzeldi" mesajı gider
+30. Telegram ayarı yoksa çökmez, anlaşılır mesaj verir, ağa çıkmaz
+31. Nöbet bitip Nöbetçi kapandıysa eski nabız alarm değildir; açık iş varken eskirse alarmdır
+32. `--aralik` ile kendi içinde dönerken de aynı alarm tek mesajdır
+33. `zamanla` yalnız komutu yazar, hiçbir şey çalıştırmaz
+
+Panel için:
+
+34. Her iş için zaman, ad, komut, karar ve süre görünür; karar renkle ayrılır; dış kaynak yoktur
+35. Defter yoksa ya da boşsa anlamlı bir boş sayfa çıkar
+36. Bozuk ya da yarım satır atlanır ve sayılır
+37. Olaylardaki metin HTML ya da script enjekte edemez
+38. Token, kişisel yol ve Telegram ayarı panele sızmaz
 
 Testler gerçek Telegram'a mesaj atmaz; mesajlar sahte bir kutuya düşer.
 

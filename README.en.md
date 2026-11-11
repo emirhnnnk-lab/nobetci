@@ -92,12 +92,45 @@ Writing "ask the human" into a file is not enough if I forget to open the file. 
 
 Setup is one-time: create a bot with BotFather, paste the token into `~/.nobetci/telegram.json`, send the bot any message, then run `python nobetci.py telegram-kur` (finds the chat id, saves it, sends a test message). The token lives in the user folder, not in the repo. Without settings, notifications are silently off; if Telegram is unreachable, watching continues and the event log says the message was not delivered. Tests never send real messages.
 
+### Scheduled heartbeat check
+
+`durum` tells me whether the watchman itself is alive, but only if I look. `nabiz` (pulse) runs the same check and writes to Telegram when there is an alarm; otherwise it stays quiet:
+
+```bash
+python nobetci.py nabiz .nobetci                  # one round (Task Scheduler calls this every N minutes)
+python nobetci.py nabiz .nobetci --aralik 300     # or loop by itself, checking every 5 minutes
+```
+
+- **The same alarm is not sent every round.** The last reported state is kept in `nabiz_bildirim.json` in the folder. No new message until the state changes; a lasting alarm is repeated every 6 hours (`--tekrar SEC`). When it recovers, a single "recovered" message is sent.
+- A message that could not be delivered is not recorded, so the next round retries. Without Telegram settings it does not crash; it says so and still returns the alarm code.
+- Exit code: 0 ok, 1 pulse is old, 2 no pulse file.
+- If the pulse is old but every job in the event log is closed, there is no alarm: the watchman didn't die, its shift ended. Same lesson as 21:36, this time for the watchman itself.
+
+Nöbetçi does not register anything with Windows Task Scheduler itself; it only prints the commands:
+
+```bash
+python nobetci.py zamanla .nobetci --dakika 10    # prints create, run, query and delete commands
+```
+
+Running the printed `schtasks /Create ...` line yourself makes the task run every 10 minutes while you are logged in (via `pythonw`, no console window). To remove it: `schtasks /Delete /TN "Nobetci-nabiz-..." /F`, also printed.
+
+### Dashboard
+
+`panel` turns the recent jobs in the event log into a single static HTML file: time, job name, command, decision, duration, restarts and cause. No external resources (no CDN, fonts or scripts), readable in light and dark themes, no overflow on a phone.
+
+```bash
+python nobetci.py panel .nobetci                          # .nobetci/panel.html
+python nobetci.py panel ornek/durum ornek/durum_demo --cikti panel.html --son 50
+```
+
+Only decision data goes into the page: no evidence lines from logs, paths in commands are shortened to file names, arguments like `--token` are masked, and the Telegram settings are never read. Every text from the events is HTML-escaped; a broken or half-written line does not crash the page, it is skipped and counted.
+
 The config file is still there for watching several jobs together:
 
 ```bash
 python nobetci.py izle ornek/ytfactory_senaryo.json   # start and watch the jobs
 python nobetci.py durum ornek/durum                    # is the watchman alive? (0 = ok, 1 = alarm)
-python tests/test_nobetci.py                           # 25 tests (17 failure scenarios + 5 single command + 3 notifications)
+python tests/test_nobetci.py                           # 38 tests (17 failure scenarios + 5 single command + 3 notifications + 8 heartbeat + 5 dashboard)
 ```
 
 Job definition (`ornek/ytfactory_senaryo.json`):

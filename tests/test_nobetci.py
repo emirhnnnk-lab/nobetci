@@ -1,4 +1,6 @@
 """Her test gerçekten yaşanmış bir arızayı küçük bir sahte işle canlandırır."""
+import contextlib
+import io
 import json
 import os
 import sys
@@ -276,6 +278,184 @@ class Senaryolar(unittest.TestCase):
             self.assertFalse(self._bildir("deneme"))                   # gönderilemedi → False, istisna yok
         finally:
             N._telegram = eski
+
+    # ---- zamanlanmış nabız: alarmda haber, aynı alarm bir kez, düzelince bir kez
+    def nabiz_yaz(self, yas_sn: float):
+        k = self.d / "durum"
+        (k / "nabiz").write_text(str(time.time() - yas_sn))
+        return str(k)
+
+    def sessiz(self, f, *a, **k):
+        cikti = io.StringIO()
+        with contextlib.redirect_stdout(cikti):
+            sonuc = f(*a, **k)
+        return sonuc, cikti.getvalue()
+
+    # 26) nöbetçinin nabzı eski → alarm kodu döner ve Telegram'a tek mesaj gider
+    def test_nabiz_alarmda_bildirim_gider(self):
+        k = self.nabiz_yaz(600)
+        kod, _ = self.sessiz(N.nabiz_tur, k, esik_sn=60)
+        self.assertEqual(kod, 1)
+        self.assertEqual(len(self.kutu), 1)
+        self.assertIn("alarm", self.kutu[0])
+
+    # 27) nabız taze → 0 döner, kimse rahatsız edilmez
+    def test_nabiz_tamamsa_sessiz(self):
+        k = self.nabiz_yaz(5)
+        self.assertEqual(self.sessiz(N.nabiz_tur, k, esik_sn=60)[0], 0)
+        self.assertEqual(self.kutu, [])
+
+    # 28) aynı alarm ikinci turda tekrar gitmez; alarm türü değişirse ya da hatırlatma süresi dolarsa gider
+    def test_ayni_alarm_tekrar_gitmez(self):
+        k = self.nabiz_yaz(600)
+        self.sessiz(N.nabiz_tur, k, esik_sn=60)
+        kod, yazi = self.sessiz(N.nabiz_tur, k, esik_sn=60)
+        self.assertEqual(kod, 1)
+        self.assertEqual(len(self.kutu), 1)
+        self.assertIn("tekrar gönderilmedi", yazi)
+        self.sessiz(N.nabiz_tur, k, esik_sn=60, tekrar_sn=0)          # hatırlatma süresi doldu
+        self.assertEqual(len(self.kutu), 2)
+        self.assertIn("hatırlatma", self.kutu[1])
+        (Path(k) / "nabiz").unlink()                                    # alarm türü değişti: nabız dosyası yok
+        self.assertEqual(self.sessiz(N.nabiz_tur, k, esik_sn=60)[0], 2)
+        self.assertEqual(len(self.kutu), 3)
+
+    # 29) alarm düzelince tek bir "düzeldi" mesajı gider, sonra yine sessizlik
+    def test_nabiz_duzelince_tek_mesaj(self):
+        k = self.nabiz_yaz(600)
+        self.sessiz(N.nabiz_tur, k, esik_sn=60)
+        self.nabiz_yaz(1)
+        self.assertEqual(self.sessiz(N.nabiz_tur, k, esik_sn=60)[0], 0)
+        self.sessiz(N.nabiz_tur, k, esik_sn=60)
+        self.assertEqual(len(self.kutu), 2)
+        self.assertIn("düzeldi", self.kutu[1])
+
+    # 30) Telegram ayarı yoksa çökmez, anlaşılır mesaj verir, alarm kodu yine döner; ağa çıkılmaz
+    def test_nabiz_ayarsiz(self):
+        N.bildir = self._bildir                                         # gerçek bildir, ama ayar yok
+        eski = N._telegram
+        N._telegram = lambda *a, **k: (_ for _ in ()).throw(AssertionError("ağa çıkılmamalıydı"))
+        try:
+            kod, yazi = self.sessiz(N.nabiz_tur, self.nabiz_yaz(600), esik_sn=60)
+        finally:
+            N._telegram = eski
+        self.assertEqual(kod, 1)
+        self.assertIn("Telegram ayarı yok", yazi)
+        self.assertFalse((self.d / "durum" / "nabiz_bildirim.json").exists())   # bir dahakine yine denenir
+
+    # 31) nöbet bitip nöbetçi kapandıysa eski nabız alarm değildir; açık iş varken eskirse alarmdır
+    def test_nobet_bitince_eski_nabiz_alarm_degil(self):
+        g = self.gorev("iyi", "open('sonuc.json','w').write('{}')", cikti=str(self.d / "sonuc.json"))
+        N.izle([g], self.defter, aralik=0.2)
+        k = self.nabiz_yaz(600)
+        self.assertEqual(self.sessiz(N.nabiz_tur, k, esik_sn=60)[0], 0)
+        with (Path(k) / "olaylar.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"zaman": "2026-11-11 10:00:00", "gorev": "yarim", "durum": "BASLADI"}) + "\n")
+        self.assertEqual(self.sessiz(N.nabiz_tur, k, esik_sn=60)[0], 1)
+        self.assertEqual(len(self.kutu), 1)
+
+    # 32) --aralik ile kendi içinde döner; 3 turda aynı alarm yine tek mesaj
+    def test_nabiz_dongu(self):
+        k = self.nabiz_yaz(600)
+        kod, _ = self.sessiz(N.nabiz, [k, "--esik", "60", "--aralik", "0.01", "--tur", "3"])
+        self.assertEqual(kod, 1)
+        self.assertEqual(len(self.kutu), 1)
+        self.assertEqual(self.sessiz(N.nabiz, [])[0], 3)                # kullanım hatası
+
+    # 33) zamanla yalnız komutu ekrana yazar: hiçbir süreç başlatmaz, sisteme dokunmaz
+    def test_zamanla_yalniz_yazar(self):
+        yasak = lambda *a, **k: (_ for _ in ()).throw(AssertionError("zamanla bir şey çalıştırmamalı"))  # noqa: E731
+        eski = (N.subprocess.run, N.subprocess.Popen, N.os.system)
+        N.subprocess.run = N.subprocess.Popen = N.os.system = yasak
+        try:
+            kod, yazi = self.sessiz(N.zamanla, [str(self.d / "durum"), "--dakika", "15"])
+        finally:
+            N.subprocess.run, N.subprocess.Popen, N.os.system = eski
+        self.assertEqual(kod, 0)
+        for parca in ("schtasks /Create /SC MINUTE /MO 15", "/Delete", "nabiz", str((self.d / "durum").resolve()),
+                      "KAYDEDİLMEDİ"):
+            self.assertIn(parca, yazi)
+
+    # ---- panel: defterden tek dosyalık HTML
+    def defter_yaz(self, satirlar: list):
+        p = self.d / "durum" / "olaylar.jsonl"
+        p.write_text("".join((s if isinstance(s, str) else json.dumps(s, ensure_ascii=False)) + "\n" for s in satirlar),
+                     encoding="utf-8")
+
+    def panel(self, *klasor):
+        p, n, bozuk = N.panel_uret(list(klasor) or [str(self.d / "durum")], self.d / "panel.html")
+        return p.read_text(encoding="utf-8"), n, bozuk
+
+    # 34) normal: her iş için zaman, ad, komut, karar, süre; karar renk sınıfıyla ayrılır; dış kaynak yok
+    def test_panel_normal(self):
+        self.defter_yaz([
+            {"zaman": "2026-11-08 16:13:55", "gorev": "senaryo", "durum": "BASLADI", "komut": ["python", "src/ajan.py"]},
+            {"zaman": "2026-11-08 16:20:00", "gorev": "senaryo", "durum": "OLDU", "karar": "yeniden_baslat"},
+            {"zaman": "2026-11-08 16:29:27", "gorev": "senaryo", "durum": "OLDU", "karar": "insana_sor",
+             "teshis": {"bulgular": [{"sebep": "GPU belleği yetmedi", "gecici": True, "kanit": "CUDA out of memory"}]}},
+            {"zaman": "2026-11-11 17:02:35", "gorev": "demo", "durum": "BASLADI", "komut": ["python", "demo.py"]},
+            {"zaman": "2026-11-11 17:02:39", "gorev": "demo", "durum": "BITTI", "karar": "kapat"},
+        ])
+        h, n, bozuk = self.panel()
+        self.assertEqual((n, bozuk), (2, 0))
+        for parca in ("senaryo", "ajan.py", "15 dk 32 sn", "insana soruldu", "1× yeniden başlatıldı", "GPU belleği yetmedi",
+                      "demo", "4 sn", 'class="k-BITTI"', 'class="k-OLDU"', "prefers-color-scheme:dark", "viewport"):
+            self.assertIn(parca, h)
+        self.assertNotIn("CUDA out of memory", h)                       # kanıt satırı (log içeriği) panele girmez
+        self.assertLess(h.index("demo"), h.index("senaryo"))            # en yeni üstte
+        for dis in ("<script", "http://", "https://", "@import", "<link"):
+            self.assertNotIn(dis, h)
+
+    # 35) defter yoksa ya da boşsa anlamlı boş durum sayfası
+    def test_panel_bos(self):
+        h, n, _ = self.panel(str(self.d / "olmayan"))
+        self.assertEqual(n, 0)
+        self.assertIn("bulunamadı", h)
+        self.defter_yaz([])
+        h, n, _ = self.panel()
+        self.assertIn("henüz kayıtlı iş yok", h)
+
+    # 36) bozuk/yarım satır paneli çökertmez: atlanır ve sayılır
+    def test_panel_bozuk_satir(self):
+        self.defter_yaz([
+            {"zaman": "2026-11-11 10:00:00", "gorev": "iyi", "durum": "BASLADI", "komut": ["python", "a.py"]},
+            '{"zaman": "2026-11-11 10:00:05", "gorev": "iy',               # yarım yazılmış satır
+            "[1, 2]",                                                       # JSON ama olay değil
+            {"zaman": "2026-11-11 10:00:09", "gorev": "iyi", "durum": "BITTI", "karar": "kapat", "teshis": "bozuk"},
+        ])
+        h, n, bozuk = self.panel()
+        self.assertEqual((n, bozuk), (1, 2))
+        self.assertIn("2 bozuk satır atlandı", h)
+        self.assertIn("9 sn", h)
+
+    # 37) olaylardaki her metin kaçışlanır: iş adı ya da sebep HTML/script enjekte edemez
+    def test_panel_html_kacisi(self):
+        self.defter_yaz([
+            {"zaman": "2026-11-11 10:00:00", "gorev": "<script>alert(1)</script>", "durum": "BASLADI",
+             "komut": ["python", "<img src=x onerror=alert(2)>"]},
+            {"zaman": "2026-11-11 10:00:01", "gorev": "<script>alert(1)</script>", "durum": "OLDU", "karar": "insana_sor",
+             "teshis": {"bulgular": [{"sebep": "a & b <b>kalın</b>"}]}},
+        ])
+        h = self.panel()[0]
+        self.assertNotIn("<script>", h)
+        self.assertNotIn("<img", h)
+        self.assertNotIn("<b>kalın", h)
+        self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", h)
+        self.assertIn("a &amp; b &lt;b&gt;kalın&lt;/b&gt;", h)
+
+    # 38) panele gizli bilgi girmez: token argümanı maskelenir, kişisel yol dosya adına iner, Telegram ayarı okunmaz
+    def test_panel_gizli_bilgi_sizmaz(self):
+        (self.d / "telegram.json").write_text('{"token": "SAHTE-TOKEN-987", "chat_id": "55"}', encoding="utf-8")
+        self.defter_yaz([
+            {"zaman": "2026-11-11 10:00:00", "gorev": "egit", "durum": "BASLADI",
+             "komut": [r"C:\Users\birisi\AppData\python.exe", r"C:\Users\birisi\proje\egit.py", "--token", "gizli123",
+                       "--api-key=gizli456"]},
+        ])
+        h = self.panel()[0]
+        for sizinti in ("SAHTE-TOKEN-987", "gizli123", "gizli456", "birisi", "Users"):
+            self.assertNotIn(sizinti, h)
+        self.assertIn("python egit.py --token ••• --api-key=•••", h)
+        self.assertIn("Kayıt yarım", h)                                  # bitmemiş iş de görünür
 
 
 if __name__ == "__main__":
