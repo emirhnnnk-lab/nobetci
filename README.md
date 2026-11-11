@@ -6,6 +6,8 @@ Akşam uzun bir deney başlatıyorum, sabah kalkıp bakıyorum: ya bitmiş, ya d
 
 Buna **sessiz ölüm** diyorum. Benim başıma birkaç kez geldi. Bir noktadan sonra "bunu ben kontrol etmeyeyim, bir bekçi etsin" dedim ve Nöbetçi'yi yazdım.
 
+![Nöbetçi gerçek çalışması: biri bitti, biri 'yeşil ama ölü', biri askıda; sebepler kanıt satırıyla raporlanıyor](docs/ekran-1.png)
+
 Nöbetçi'nin sorduğu soru basit: "Çalışıyor musun?" değil, **"İlerliyor musun, sonuç ortada mı?"** Bu ikisi aynı şey değil. Bir program açık durup hiçbir şey yapmıyor olabilir.
 
 ## Neden yazdım: başıma gelen üç olay

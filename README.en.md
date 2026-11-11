@@ -6,6 +6,8 @@ In the evening I start a long experiment. In the morning I check: either it fini
 
 I call this **silent death**. It happened to me several times. At some point I thought, "I shouldn't be the one checking this; a watchman should", and I wrote Nöbetçi.
 
+![Nöbetçi real run: one job finished, one 'green but dead', one hung; causes reported with evidence lines](docs/ekran-1.png)
+
 The question it asks is simple. Not "Are you running?" but **"Are you making progress, and is the result there?"** Those are not the same thing. A program can be open and doing nothing.
 
 ## Why I built it: three things that happened to me
