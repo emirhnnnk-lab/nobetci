@@ -118,6 +118,8 @@ Running the printed `schtasks /Create ...` line yourself makes the task run ever
 
 `panel` turns the recent jobs in the event log into a single static HTML file: time, job name, command, decision, duration, restarts and cause. No external resources (no CDN, fonts or scripts), readable in light and dark themes, no overflow on a phone.
 
+![Nöbetçi panel: jobs as cards colored by verdict, with duration and reason](docs/ekran-2.png)
+
 ```bash
 python nobetci.py panel .nobetci                          # .nobetci/panel.html
 python nobetci.py panel ornek/durum ornek/durum_demo --cikti panel.html --son 50

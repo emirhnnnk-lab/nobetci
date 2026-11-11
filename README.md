@@ -122,6 +122,8 @@ python nobetci.py zamanla .nobetci --dakika 10    # kurma, deneme, bakma ve kald
 
 Defterdeki son işleri tek dosyalık bir HTML sayfasına döküyor: zaman, iş adı, komut, karar, süre, yeniden başlatma sayısı ve sebep. Dış kaynak yok (CDN, font, script yok), açık ve koyu temada okunuyor, telefonda taşmıyor.
 
+![Nöbetçi paneli: işler karara göre renkli kartlarda, süre ve sebep yanında](docs/ekran-2.png)
+
 ```bash
 python nobetci.py panel .nobetci                          # .nobetci/panel.html
 python nobetci.py panel ornek/durum ornek/durum_demo --cikti panel.html --son 50
